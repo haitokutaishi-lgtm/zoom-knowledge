@@ -591,17 +591,20 @@ async def send_to_discord(topic: str, date: str, surge_url: str, notion_url: str
     forwarding_text = _build_forwarding_message(topic, surge_url)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        # 1通目：内部確認embed
+        # 1通目：内部確認embed＋「次のメッセージを転送して」の案内
         r = await client.post(
             DISCORD_WEBHOOK_URL,
-            json={"embeds": [embed]},
+            json={
+                "embeds": [embed],
+                "content": "📤 **↓ 次のメッセージを長押しコピーして転送してください**",
+            },
         )
         r.raise_for_status()
 
-        # 2通目：転送用テキスト（長押しコピーしてそのまま送れる）
+        # 2通目：転送用テキストのみ（余計な文字一切なし）
         r2 = await client.post(
             DISCORD_WEBHOOK_URL,
-            json={"content": f"📤 **↓ このメッセージをそのまま転送してください ↓**\n```\n{forwarding_text}\n```"},
+            json={"content": forwarding_text},
         )
         r2.raise_for_status()
         logger.info("Discord通知送信完了")
