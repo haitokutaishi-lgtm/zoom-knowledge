@@ -34,6 +34,12 @@ OPENAI_API_KEY        = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY     = os.getenv("ANTHROPIC_API_KEY", "")
 NOTION_API_KEY        = os.getenv("NOTION_API_KEY", "")
 NOTION_DATABASE_ID    = os.getenv("NOTION_DATABASE_ID", "")
+DISCORD_WEBHOOK_URL   = os.getenv("DISCORD_WEBHOOK_URL", "")
+SURGE_TOKEN           = os.getenv("SURGE_TOKEN", "")
+LOCAL_KNOWLEDGE_DIR   = os.getenv(
+    "LOCAL_KNOWLEDGE_DIR",
+    str(Path.home() / "Downloads" / "claude作業フォルダ" / "ナレッジ")
+)
 
 
 # ─── Zoom Webhook受信 ─────────────────────────────────────────
@@ -118,7 +124,36 @@ async def process_recording(data: dict):
             knowledge=knowledge
         )
 
-        logger.info(f"完了: {notion_url}")
+        # Step5: HTMLレポート生成
+        date_str = start_at[:10] if start_at else datetime.now().strftime("%Y-%m-%d")
+        html = await generate_html_report(
+            transcript=transcript,
+            topic=topic,
+            host=host,
+            date=date_str,
+            duration=duration
+        )
+
+        # Step6: surge.shにデプロイ
+        surge_url = ""
+        if SURGE_TOKEN and html:
+            surge_url = await deploy_to_surge(html, topic, date_str)
+
+        # Step7: Discordに通知
+        await send_to_discord(
+            topic=topic,
+            date=date_str,
+            surge_url=surge_url or "(デプロイ未設定)",
+            notion_url=notion_url
+        )
+
+        # Step8: ローカルナレッジフォルダに保存（ローカル実行時のみ有効）
+        save_to_local_knowledge(
+            topic=topic, date=date_str, host=host, duration=duration,
+            transcript=transcript, knowledge=knowledge, surge_url=surge_url
+        )
+
+        logger.info(f"全処理完了: surge={surge_url} notion={notion_url}")
 
     except Exception as e:
         logger.error(f"処理エラー: {e}", exc_info=True)
@@ -332,6 +367,199 @@ def _text_to_notion_blocks(text: str) -> list:
                 "paragraph": {"rich_text": [{"text": {"content": line}}]}
             })
     return blocks
+
+
+# ─── HTMLレポート生成プロンプト ────────────────────────────────
+HTML_REPORT_PROMPT = """
+あなたはコーチングのプロフェッショナルです。
+以下のミーティング書き起こしを読み、受講生向けの1on1レポートHTMLを生成してください。
+
+# ミーティング情報
+タイトル: {topic}
+参加者: {host}
+日時: {date}
+時間: {duration}分
+
+# 書き起こし
+{transcript}
+
+---
+
+以下の完全なHTMLを出力してください（```htmlなどのマークダウン不要、HTMLのみ）：
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1on1レポート - {topic}</title>
+<style>
+  body {{ font-family: 'Hiragino Sans', 'Yu Gothic', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f8f9fa; color: #333; }}
+  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 24px; }}
+  .header h1 {{ margin: 0 0 8px; font-size: 1.6em; }}
+  .header p {{ margin: 0; opacity: 0.9; font-size: 0.95em; }}
+  .card {{ background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+  .card h2 {{ margin: 0 0 16px; font-size: 1.1em; color: #5a67d8; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }}
+  ul {{ margin: 0; padding-left: 20px; }}
+  li {{ margin-bottom: 8px; line-height: 1.6; }}
+  .action-item {{ display: flex; align-items: flex-start; gap: 12px; padding: 10px; border-radius: 8px; margin-bottom: 8px; }}
+  .action-high {{ background: #fff5f5; border-left: 4px solid #fc8181; }}
+  .action-mid  {{ background: #fffaf0; border-left: 4px solid #f6ad55; }}
+  .badge {{ font-size: 0.75em; padding: 2px 8px; border-radius: 12px; font-weight: bold; white-space: nowrap; }}
+  .badge-high {{ background: #fed7d7; color: #c53030; }}
+  .badge-mid  {{ background: #feebc8; color: #c05621; }}
+  .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 20px; border-radius: 8px; line-height: 1.8; }}
+  .footer {{ text-align: center; color: #999; font-size: 0.8em; margin-top: 24px; }}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📋 1on1レポート</h1>
+  <p>{topic} ｜ {date}</p>
+</div>
+
+<!-- 以下に実際の内容を書き起こしから生成してください -->
+<!-- 各セクション: 会議の目的、主な議論内容、決定事項、ネクストアクション（優先度高・中）、コーチメッセージ -->
+<!-- ネクストアクションは action-high / action-mid クラスを使って優先度を視覚化 -->
+
+<div class="footer">
+  <p>このレポートはAIが自動生成しました ｜ {date}</p>
+</div>
+</body>
+</html>
+"""
+
+
+async def generate_html_report(transcript: str, topic: str, host: str, date: str, duration: int) -> str:
+    """ClaudeでHTMLレポートを生成"""
+    logger.info("HTMLレポート生成中...")
+    prompt = HTML_REPORT_PROMPT.format(
+        topic=topic, host=host, date=date, duration=duration,
+        transcript=transcript[:8000]
+    )
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-opus-4-5",
+                "max_tokens": 4096,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        )
+        r.raise_for_status()
+        html = r.json()["content"][0]["text"].strip()
+        # マークダウンコードブロックが含まれていたら除去
+        if html.startswith("```"):
+            html = "\n".join(html.split("\n")[1:])
+        if html.endswith("```"):
+            html = "\n".join(html.split("\n")[:-1])
+        logger.info("HTMLレポート生成完了")
+        return html
+
+
+# ─── surge.shデプロイ ──────────────────────────────────────────
+async def deploy_to_surge(html: str, topic: str, date: str) -> str:
+    """HTMLをsurge.shに自動デプロイしてURLを返す"""
+    import subprocess, re
+
+    # URLスラッグ生成: 1on1-20260605-topic-name
+    slug_topic = re.sub(r'[^a-zA-Z0-9぀-鿿]', '-', topic)[:30].strip('-')
+    domain = f"1on1-{date}-{slug_topic}.surge.sh".lower().replace(' ', '-')
+
+    # 一時ディレクトリにindex.htmlを作成
+    with tempfile.TemporaryDirectory() as tmpdir:
+        html_path = Path(tmpdir) / "index.html"
+        html_path.write_text(html, encoding="utf-8")
+
+        # surge deploy
+        env = {**os.environ, "SURGE_TOKEN": SURGE_TOKEN}
+        result = subprocess.run(
+            ["surge", tmpdir, domain, "--token", SURGE_TOKEN],
+            capture_output=True, text=True, env=env, timeout=60
+        )
+        if result.returncode != 0:
+            logger.error(f"Surgeデプロイ失敗: {result.stderr}")
+            return ""
+        url = f"https://{domain}"
+        logger.info(f"Surgeデプロイ完了: {url}")
+        return url
+
+
+# ─── Discord通知 ───────────────────────────────────────────────
+async def send_to_discord(topic: str, date: str, surge_url: str, notion_url: str):
+    """DiscordのWebhookにミーティングレポートを送信"""
+    if not DISCORD_WEBHOOK_URL:
+        logger.warning("DISCORD_WEBHOOK_URL未設定、スキップ")
+        return
+
+    embed = {
+        "title": f"📋 1on1レポート完成 — {topic}",
+        "description": f"**{date}** のミーティングレポートが自動生成されました。\n内容確認後、受講生へ送付してください。",
+        "color": 0x5a67d8,
+        "fields": [
+            {"name": "🌐 クライアント向けレポート", "value": f"[レポートを開く]({surge_url})", "inline": False},
+            {"name": "📝 Notionナレッジ", "value": f"[Notionを開く]({notion_url})", "inline": False},
+        ],
+        "footer": {"text": "Zoom Knowledge Auto-Generator"},
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            DISCORD_WEBHOOK_URL,
+            json={"embeds": [embed]},
+        )
+        r.raise_for_status()
+        logger.info("Discord通知送信完了")
+
+
+# ─── ローカルナレッジフォルダ保存 ─────────────────────────────
+def save_to_local_knowledge(
+    topic: str, date: str, host: str, duration: int,
+    transcript: str, knowledge: str, surge_url: str
+) -> str:
+    """ローカルの「ナレッジ」フォルダにMarkdownで保存"""
+    knowledge_dir = Path(LOCAL_KNOWLEDGE_DIR)
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+
+    # ファイル名: 2026-06-05_ミーティング名.md
+    safe_topic = "".join(c for c in topic if c not in r'\/:*?"<>|').strip()[:40]
+    filename = f"{date}_{safe_topic}.md"
+    filepath = knowledge_dir / filename
+
+    content = f"""# {topic}
+
+**日時：** {date}　**ホスト：** {host}　**時間：** {duration}分
+{f'**クライアント向けレポート：** {surge_url}' if surge_url else ''}
+
+---
+
+{knowledge}
+
+---
+
+## 📝 全文書き起こし
+
+<details>
+<summary>クリックで展開</summary>
+
+{transcript}
+
+</details>
+
+---
+*自動生成: {datetime.now().strftime("%Y-%m-%d %H:%M")}*
+"""
+
+    filepath.write_text(content, encoding="utf-8")
+    logger.info(f"ローカル保存完了: {filepath}")
+    return str(filepath)
 
 
 # ─── ヘルスチェック ────────────────────────────────────────────
