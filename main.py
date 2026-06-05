@@ -539,6 +539,34 @@ async def deploy_to_surge(html: str, topic: str, date: str, participant_name: st
         return url
 
 
+# ─── 転送用メッセージ生成 ──────────────────────────────────────
+def _build_forwarding_message(topic: str, surge_url: str) -> str:
+    """受講生にそのまま転送できるテキストメッセージを生成"""
+    # topicから受講生名を抽出（日本語・英語どちらも対応）
+    import re
+    # "1on1 牧野はるか" / "1on1 Haruka Makino" / "面談 田中太郎" などに対応
+    name = re.sub(r'(?i)(1on1|面談|ミーティング|mtg|meeting|session|zoom|\s*[-×x&]\s*)', '', topic).strip()
+    # 自分のメールアドレスやアカウント名が残ったら除去
+    name = re.sub(r'haitokutaishi|taishi|背徳タイシ', '', name, flags=re.IGNORECASE).strip()
+    name = name if name else "受講生"
+
+    return (
+        f"{name}さん\n"
+        f"\n"
+        f"本日もセッションにご参加いただきありがとうございました。\n"
+        f"本日のセッションレポートをお送りします。\n"
+        f"ぜひご確認ください。\n"
+        f"\n"
+        f"▼本日のレポート\n"
+        f"{surge_url}\n"
+        f"\n"
+        f"ご不明な点があればいつでもご連絡ください。\n"
+        f"引き続きよろしくお願いいたします。\n"
+        f"\n"
+        f"タイシ"
+    )
+
+
 # ─── Discord通知 ───────────────────────────────────────────────
 async def send_to_discord(topic: str, date: str, surge_url: str, notion_url: str):
     """DiscordのWebhookにミーティングレポートを送信"""
@@ -546,24 +574,36 @@ async def send_to_discord(topic: str, date: str, surge_url: str, notion_url: str
         logger.warning("DISCORD_WEBHOOK_URL未設定、スキップ")
         return
 
+    # ① 内部確認用embed
     embed = {
         "title": f"📋 1on1レポート完成 — {topic}",
-        "description": f"**{date}** のミーティングレポートが自動生成されました。\n内容確認後、受講生へ送付してください。",
+        "description": f"**{date}** のセッションレポートが自動生成されました。\n下のメッセージを長押しコピーして転送してください。",
         "color": 0x5a67d8,
         "fields": [
-            {"name": "🌐 クライアント向けレポート", "value": f"[レポートを開く]({surge_url})", "inline": False},
-            {"name": "📝 Notionナレッジ", "value": f"[Notionを開く]({notion_url})", "inline": False},
+            {"name": "🌐 クライアント向けレポート", "value": surge_url, "inline": False},
+            {"name": "📝 Notionナレッジ", "value": notion_url, "inline": False},
         ],
         "footer": {"text": "Zoom Knowledge Auto-Generator"},
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
+    # ② 転送用テキスト（そのままコピーして送付できる）
+    forwarding_text = _build_forwarding_message(topic, surge_url)
+
     async with httpx.AsyncClient(timeout=30) as client:
+        # 1通目：内部確認embed
         r = await client.post(
             DISCORD_WEBHOOK_URL,
             json={"embeds": [embed]},
         )
         r.raise_for_status()
+
+        # 2通目：転送用テキスト（長押しコピーしてそのまま送れる）
+        r2 = await client.post(
+            DISCORD_WEBHOOK_URL,
+            json={"content": f"📤 **↓ このメッセージをそのまま転送してください ↓**\n```\n{forwarding_text}\n```"},
+        )
+        r2.raise_for_status()
         logger.info("Discord通知送信完了")
 
 
