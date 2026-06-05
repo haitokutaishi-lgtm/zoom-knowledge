@@ -38,7 +38,7 @@ DISCORD_WEBHOOK_URL   = os.getenv("DISCORD_WEBHOOK_URL", "")
 SURGE_TOKEN           = os.getenv("SURGE_TOKEN", "")
 LOCAL_KNOWLEDGE_DIR   = os.getenv(
     "LOCAL_KNOWLEDGE_DIR",
-    str(Path.home() / "Downloads" / "claude作業フォルダ" / "ナレッジ")
+    str(Path.home() / "Downloads" / "claude作業フォルダ" / "ナレッジ" / "Zoomセッション記録")
 )
 
 
