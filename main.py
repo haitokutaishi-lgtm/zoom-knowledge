@@ -324,6 +324,8 @@ async def save_to_notion(
                 "children": content_blocks[:100],  # Notionは100ブロック制限
             },
         )
+        if not r.is_success:
+            logger.error(f"Notionエラー詳細: {r.text}")
         r.raise_for_status()
         page_id  = r.json()["id"]
         page_url = r.json()["url"]
@@ -331,8 +333,14 @@ async def save_to_notion(
         return page_url
 
 
+def _safe_text(text: str) -> list:
+    """Notionの2000文字制限に対応してrich_textを分割"""
+    chunks = [text[i:i+1999] for i in range(0, len(text), 1999)]
+    return [{"text": {"content": c}} for c in chunks] if chunks else [{"text": {"content": ""}}]
+
+
 def _text_to_notion_blocks(text: str) -> list:
-    """テキストをNotionブロックに変換（見出し・箇条書き対応）"""
+    """テキストをNotionブロックに変換（見出し・箇条書き・2000文字制限対応）"""
     blocks = []
     for line in text.split("\n"):
         if not line.strip():
@@ -340,31 +348,31 @@ def _text_to_notion_blocks(text: str) -> list:
         if line.startswith("## "):
             blocks.append({
                 "object": "block", "type": "heading_2",
-                "heading_2": {"rich_text": [{"text": {"content": line[3:]}}]}
+                "heading_2": {"rich_text": _safe_text(line[3:])}
             })
         elif line.startswith("# "):
             blocks.append({
                 "object": "block", "type": "heading_1",
-                "heading_1": {"rich_text": [{"text": {"content": line[2:]}}]}
+                "heading_1": {"rich_text": _safe_text(line[2:])}
             })
         elif line.startswith("- ") or line.startswith("• "):
             blocks.append({
                 "object": "block", "type": "bulleted_list_item",
-                "bulleted_list_item": {"rich_text": [{"text": {"content": line[2:]}}]}
+                "bulleted_list_item": {"rich_text": _safe_text(line[2:])}
             })
         elif line.startswith("- [ ] ") or line.startswith("- [x] "):
             checked = line.startswith("- [x]")
             blocks.append({
                 "object": "block", "type": "to_do",
                 "to_do": {
-                    "rich_text": [{"text": {"content": line[6:]}}],
+                    "rich_text": _safe_text(line[6:]),
                     "checked": checked
                 }
             })
         else:
             blocks.append({
                 "object": "block", "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": line}}]}
+                "paragraph": {"rich_text": _safe_text(line)}
             })
     return blocks
 
@@ -468,21 +476,27 @@ async def deploy_to_surge(html: str, topic: str, date: str) -> str:
     """HTMLをsurge.shに自動デプロイしてURLを返す"""
     import subprocess, re
 
-    # URLスラッグ生成: 1on1-20260605-topic-name
-    slug_topic = re.sub(r'[^a-zA-Z0-9぀-鿿]', '-', topic)[:30].strip('-')
-    domain = f"1on1-{date}-{slug_topic}.surge.sh".lower().replace(' ', '-')
+    # URLスラッグ生成: 1on1-20260605-topic-name（ASCII文字のみ）
+    slug_topic = re.sub(r'[^a-zA-Z0-9]', '-', topic)
+    slug_topic = re.sub(r'-+', '-', slug_topic)[:30].strip('-').lower()
+    if not slug_topic:
+        slug_topic = "meeting"
+    domain = f"1on1-{date}-{slug_topic}.surge.sh"
 
     # 一時ディレクトリにindex.htmlを作成
     with tempfile.TemporaryDirectory() as tmpdir:
         html_path = Path(tmpdir) / "index.html"
         html_path.write_text(html, encoding="utf-8")
 
-        # surge deploy
+        # surge deploy（パスを明示的に指定）
+        import shutil
+        surge_bin = shutil.which("surge") or "/opt/homebrew/bin/surge"
         env = {**os.environ, "SURGE_TOKEN": SURGE_TOKEN}
         result = subprocess.run(
-            ["surge", tmpdir, domain, "--token", SURGE_TOKEN],
+            [surge_bin, tmpdir, domain, "--token", SURGE_TOKEN],
             capture_output=True, text=True, env=env, timeout=60
         )
+        logger.info(f"Surge returncode: {result.returncode}")
         if result.returncode != 0:
             logger.error(f"Surgeデプロイ失敗: {result.stderr}")
             return ""
