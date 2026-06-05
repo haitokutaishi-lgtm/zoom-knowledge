@@ -88,12 +88,15 @@ def _verify_zoom_signature(headers, body: bytes) -> bool:
 async def process_recording(data: dict):
     """録画完了イベントを受け取りナレッジ化する"""
     try:
-        payload  = data["payload"]["object"]
-        topic    = payload.get("topic", "無題ミーティング")
-        host     = payload.get("host_email", "不明")
-        duration = payload.get("duration", 0)
-        start_at = payload.get("start_time", "")
-        files    = payload.get("recording_files", [])
+        payload      = data["payload"]["object"]
+        topic        = payload.get("topic", "無題ミーティング")
+        host         = payload.get("host_email", "不明")
+        duration     = payload.get("duration", 0)
+        start_at     = payload.get("start_time", "")
+        files        = payload.get("recording_files", [])
+        # 参加者名: topicに「○○さん」「○○ with ○○」などが含まれることが多い
+        # Zoom APIではhost以外の参加者はWebhookに含まれないためtopicから取得
+        participant_name = _extract_participant_name(topic)
 
         logger.info(f"処理開始: {topic} ({duration}分)")
 
@@ -137,7 +140,7 @@ async def process_recording(data: dict):
         # Step6: surge.shにデプロイ
         surge_url = ""
         if SURGE_TOKEN and html:
-            surge_url = await deploy_to_surge(html, topic, date_str)
+            surge_url = await deploy_to_surge(html, topic, date_str, participant_name)
 
         # Step7: Discordに通知
         await send_to_discord(
@@ -161,6 +164,27 @@ async def process_recording(data: dict):
         # 一時ファイル削除
         if "audio_path" in locals():
             Path(audio_path).unlink(missing_ok=True)
+
+
+def _extract_participant_name(topic: str) -> str:
+    """Zoomのミーティングタイトルから参加者名を抽出してローマ字化
+    例: '1on1 牧野はるか' → 'makino-haruka'
+        '矢橋×田中 MTG' → 'tanaka'（ホスト以外）
+        'Haruka Makino 面談' → 'haruka-makino'
+    ASCII名はそのまま使用、日本語は文字コードベースのスラッグに変換
+    """
+    import re
+    # ASCII部分だけ抽出してスラッグ化
+    ascii_parts = re.findall(r'[a-zA-Z]+', topic)
+    if ascii_parts:
+        slug = '-'.join(ascii_parts).lower()
+        # 不要な一般単語を除去
+        stop = {'mtg', 'meeting', 'on', 'with', 'and', 'the', 'zoom', 'call', 'session'}
+        slug_parts = [p for p in slug.split('-') if p not in stop and len(p) > 1]
+        if slug_parts:
+            return '-'.join(slug_parts)[:30]
+    # 日本語の場合: 文字をそのまま使う（deploy_to_surge側でASCII変換）
+    return topic
 
 
 def _select_audio_file(files: list) -> Optional[dict]:
@@ -379,12 +403,17 @@ def _text_to_notion_blocks(text: str) -> list:
 
 # ─── HTMLレポート生成プロンプト ────────────────────────────────
 HTML_REPORT_PROMPT = """
-あなたはコーチングのプロフェッショナルです。
-以下のミーティング書き起こしを読み、受講生向けの1on1レポートHTMLを生成してください。
+あなたはUSCPA（米国公認会計士）試験のコーチです。
+以下の1on1ミーティングの書き起こしを読み、受講生に直接送付できるレポートHTMLを生成してください。
+
+# 重要：言葉遣いのルール
+- 受講生（クライアント）への丁寧な敬語で書く（「〜されています」「〜いただけます」など）
+- 上から目線・命令形・断定調は使わない
+- 励ましと感謝の気持ちを込める
+- 箇条書きも「・〜していただく」「・〜されることをおすすめします」のような丁寧な表現で
 
 # ミーティング情報
 タイトル: {topic}
-参加者: {host}
 日時: {date}
 時間: {duration}分
 
@@ -400,39 +429,42 @@ HTML_REPORT_PROMPT = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>1on1レポート - {topic}</title>
+<title>1on1レポート｜{topic}｜{date}</title>
 <style>
-  body {{ font-family: 'Hiragino Sans', 'Yu Gothic', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f8f9fa; color: #333; }}
+  body {{ font-family: 'Hiragino Sans', 'Yu Gothic', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f8f9fa; color: #333; line-height: 1.7; }}
   .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 24px; }}
-  .header h1 {{ margin: 0 0 8px; font-size: 1.6em; }}
-  .header p {{ margin: 0; opacity: 0.9; font-size: 0.95em; }}
+  .header h1 {{ margin: 0 0 6px; font-size: 1.5em; }}
+  .header .meta {{ margin: 0; opacity: 0.9; font-size: 0.9em; }}
   .card {{ background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
-  .card h2 {{ margin: 0 0 16px; font-size: 1.1em; color: #5a67d8; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }}
+  .card h2 {{ margin: 0 0 16px; font-size: 1.05em; color: #5a67d8; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }}
   ul {{ margin: 0; padding-left: 20px; }}
-  li {{ margin-bottom: 8px; line-height: 1.6; }}
-  .action-item {{ display: flex; align-items: flex-start; gap: 12px; padding: 10px; border-radius: 8px; margin-bottom: 8px; }}
+  li {{ margin-bottom: 10px; }}
+  .action-item {{ display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 8px; margin-bottom: 10px; }}
   .action-high {{ background: #fff5f5; border-left: 4px solid #fc8181; }}
   .action-mid  {{ background: #fffaf0; border-left: 4px solid #f6ad55; }}
-  .badge {{ font-size: 0.75em; padding: 2px 8px; border-radius: 12px; font-weight: bold; white-space: nowrap; }}
+  .badge {{ font-size: 0.72em; padding: 2px 8px; border-radius: 12px; font-weight: bold; white-space: nowrap; margin-top: 2px; }}
   .badge-high {{ background: #fed7d7; color: #c53030; }}
   .badge-mid  {{ background: #feebc8; color: #c05621; }}
-  .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 20px; border-radius: 8px; line-height: 1.8; }}
-  .footer {{ text-align: center; color: #999; font-size: 0.8em; margin-top: 24px; }}
+  .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 20px 24px; border-radius: 8px; line-height: 1.9; }}
+  .footer {{ text-align: center; color: #aaa; font-size: 0.78em; margin-top: 28px; padding-top: 16px; border-top: 1px solid #eee; }}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>📋 1on1レポート</h1>
-  <p>{topic} ｜ {date}</p>
+  <h1>📋 1on1セッションレポート</h1>
+  <p class="meta">{topic}　｜　{date}</p>
 </div>
 
-<!-- 以下に実際の内容を書き起こしから生成してください -->
-<!-- 各セクション: 会議の目的、主な議論内容、決定事項、ネクストアクション（優先度高・中）、コーチメッセージ -->
-<!-- ネクストアクションは action-high / action-mid クラスを使って優先度を視覚化 -->
+<!-- 書き起こしをもとに以下のセクションをすべて生成してください -->
+<!-- ① 今回のセッションについて（概要・目的、2〜3文） -->
+<!-- ② 本日ご確認いただいた内容（主な議論、箇条書き、丁寧語） -->
+<!-- ③ 決定事項・方針（合意した内容） -->
+<!-- ④ 次回までのアクション（action-high/action-midクラスで優先度を視覚化、丁寧語） -->
+<!-- ⑤ コーチからのメッセージ（messageクラス、温かく励ます文章、敬語） -->
 
 <div class="footer">
-  <p>このレポートはAIが自動生成しました ｜ {date}</p>
+  <p>本レポートはセッション内容をもとに作成しております。ご不明な点がございましたらお気軽にご連絡ください。</p>
 </div>
 </body>
 </html>
@@ -472,16 +504,19 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
 
 
 # ─── surge.shデプロイ ──────────────────────────────────────────
-async def deploy_to_surge(html: str, topic: str, date: str) -> str:
+async def deploy_to_surge(html: str, topic: str, date: str, participant_name: str = "") -> str:
     """HTMLをsurge.shに自動デプロイしてURLを返す"""
     import subprocess, re
 
-    # URLスラッグ生成: 1on1-20260605-topic-name（ASCII文字のみ）
-    slug_topic = re.sub(r'[^a-zA-Z0-9]', '-', topic)
-    slug_topic = re.sub(r'-+', '-', slug_topic)[:30].strip('-').lower()
-    if not slug_topic:
-        slug_topic = "meeting"
-    domain = f"1on1-{date}-{slug_topic}.surge.sh"
+    # URLスラッグ: 参加者名があればそれを使い、なければtopicのASCII部分を使用
+    # 例: 1on1-2026-06-05-haruka-makino
+    name_part = participant_name or topic
+    slug = re.sub(r'[^a-zA-Z0-9]', '-', name_part)
+    slug = re.sub(r'-+', '-', slug)[:30].strip('-').lower()
+    if not slug:
+        slug = "meeting"
+    # 日付はYYYY-MM-DD形式
+    domain = f"1on1-{date}-{slug}.surge.sh"
 
     # 一時ディレクトリにindex.htmlを作成
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -490,7 +525,7 @@ async def deploy_to_surge(html: str, topic: str, date: str) -> str:
 
         # surge deploy（パスを明示的に指定）
         import shutil
-        surge_bin = shutil.which("surge") or "/opt/homebrew/bin/surge"
+        surge_bin = shutil.which("surge") or "/usr/local/bin/surge"
         env = {**os.environ, "SURGE_TOKEN": SURGE_TOKEN}
         result = subprocess.run(
             [surge_bin, tmpdir, domain, "--token", SURGE_TOKEN],

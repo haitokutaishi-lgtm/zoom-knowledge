@@ -13,7 +13,7 @@ from main import (
     save_to_local_knowledge
 )
 
-TOPIC    = "テストミーティング"
+TOPIC    = "1on1 Haruka Makino"   # 実際はZoomのミーティングタイトル
 HOST     = "haitokutaishi@gmail.com"
 DATE_STR = datetime.now().strftime("%Y-%m-%d")
 DURATION = 30
@@ -47,7 +47,8 @@ async def test_with_file(audio_path: str):
     print(f"✅  {len(html)}文字のHTML生成完了\n")
 
     print("[5/6] surge.shデプロイ...")
-    surge_url = await deploy_to_surge(html, TOPIC, DATE_STR)
+    from main import _extract_participant_name
+    surge_url = await deploy_to_surge(html, TOPIC, DATE_STR, _extract_participant_name(TOPIC))
     print(f"✅  {surge_url}\n")
 
     print("[6/6] Discord通知...")
