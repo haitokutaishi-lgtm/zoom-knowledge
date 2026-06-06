@@ -644,7 +644,11 @@ async def deploy_to_surge(html: str, topic: str, date: str, participant_name: st
 
         # surge deploy（パスを明示的に指定）
         import shutil
-        surge_bin = shutil.which("surge") or "/usr/local/bin/surge"
+        surge_bin = (
+            shutil.which("surge")
+            or str(Path(__file__).parent / "node_modules" / ".bin" / "surge")
+            or "/usr/local/bin/surge"
+        )
         env = {**os.environ, "SURGE_TOKEN": SURGE_TOKEN}
         result = subprocess.run(
             [surge_bin, tmpdir, domain, "--token", SURGE_TOKEN],

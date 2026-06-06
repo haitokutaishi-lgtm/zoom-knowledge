@@ -1,8 +1,10 @@
-[phases.setup]
-nixPkgs = ["nodejs_20"]
+providers = ["node", "python"]
 
 [phases.build]
 cmds = [
-  "npm install -g surge",
+  "npm install",
   "pip install -r requirements.txt"
 ]
+
+[start]
+cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"

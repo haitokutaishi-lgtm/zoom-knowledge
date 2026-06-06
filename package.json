@@ -1,0 +1,8 @@
+{
+  "name": "zoom-knowledge",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "surge": "latest"
+  }
+}
