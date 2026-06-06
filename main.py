@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Form
+from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -651,6 +651,193 @@ def save_to_local_knowledge(
     filepath.write_text(content, encoding="utf-8")
     logger.info(f"ローカル保存完了: {filepath}")
     return str(filepath)
+
+
+# ─── ZoomのVTT文字起こしパーサー ──────────────────────────────
+def parse_vtt(content: str) -> str:
+    """ZoomのVTT形式文字起こしをプレーンテキストに変換"""
+    import re
+    result = []
+    for line in content.split("\n"):
+        line = line.strip()
+        # WEBVTT ヘッダー・空行・シーケンス番号・タイムコード行をスキップ
+        if not line or line == "WEBVTT" or line.isdigit():
+            continue
+        if re.match(r"^\d{2}:\d{2}:\d{2}", line):  # タイムコード
+            continue
+        # 話者タグ除去: <v タイシ>テキスト</v>
+        line = re.sub(r"<v [^>]+>", "", line)
+        line = re.sub(r"</v>", "", line)
+        # その他HTMLタグ除去
+        line = re.sub(r"<[^>]+>", "", line)
+        if line:
+            result.append(line)
+    return "\n".join(result)
+
+
+# ─── 手動入力フォーム（録画なし対応） ─────────────────────────
+MANUAL_FORM_HTML = """<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zoomナレッジ 手動入力</title>
+<style>
+  body {{ font-family: 'Hiragino Sans', 'Yu Gothic', sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; background: #f8f9fa; color: #333; }}
+  h1 {{ color: #5a67d8; margin-bottom: 6px; }}
+  p.sub {{ color: #666; margin-top: 0; font-size: 0.9em; }}
+  label {{ display: block; margin-top: 20px; font-weight: bold; color: #444; font-size: 0.9em; }}
+  input[type=text], input[type=date], input[type=number], textarea {{
+    width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px;
+    margin-top: 6px; font-size: 14px; box-sizing: border-box; background: white;
+  }}
+  textarea {{ height: 320px; font-family: monospace; font-size: 13px; resize: vertical; }}
+  .hint {{ font-size: 11px; color: #9ca3af; margin-top: 5px; }}
+  .row {{ display: flex; gap: 16px; }}
+  .row > div {{ flex: 1; }}
+  button {{
+    margin-top: 24px; padding: 14px 36px; background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white; border: none; border-radius: 10px; font-size: 15px; cursor: pointer; width: 100%;
+  }}
+  button:hover {{ opacity: 0.9; }}
+  button:disabled {{ opacity: 0.6; cursor: not-allowed; }}
+  #result {{ margin-top: 20px; padding: 16px 20px; border-radius: 10px; display: none; font-size: 14px; }}
+  .success {{ background: #f0fff4; border: 1px solid #9ae6b4; color: #276749; }}
+  .error   {{ background: #fff5f5; border: 1px solid #fc8181; color: #c53030; }}
+</style>
+</head>
+<body>
+<h1>📋 Zoomナレッジ 手動入力</h1>
+<p class="sub">録画なしのミーティングでも、Zoomの文字起こしを貼り付けるだけでナレッジ化できます</p>
+
+<form id="form">
+  <label>ミーティングタイトル</label>
+  <input type="text" name="topic" placeholder="例: 1on1 Haruka Makino" required>
+  <div class="hint">命名規則: 「1on1 ＋ 受講生名（英語）」→ surge URLと転送メッセージの宛名に使われます</div>
+
+  <div class="row">
+    <div>
+      <label>日付</label>
+      <input type="date" name="date" id="date-input">
+    </div>
+    <div>
+      <label>時間（分）</label>
+      <input type="number" name="duration" value="60" min="1" max="480">
+    </div>
+  </div>
+
+  <label>Zoomの文字起こし（VTT形式・プレーンテキスト どちらでも可）</label>
+  <textarea name="transcript" placeholder="ここにZoomの文字起こしを貼り付けてください&#10;&#10;Zoom → 録画 → 文字起こしを表示 → 全選択 → コピー" required></textarea>
+  <div class="hint">VTT形式（タイムコード付き）でも通常テキストでも自動判定します</div>
+
+  <button type="submit">ナレッジ化して Discord に通知</button>
+</form>
+<div id="result"></div>
+
+<script>
+  document.getElementById('date-input').value = new Date().toISOString().slice(0, 10);
+
+  document.getElementById('form').addEventListener('submit', async (e) => {{
+    e.preventDefault();
+    const btn = e.target.querySelector('button');
+    btn.textContent = '⏳ 処理中... しばらくお待ちください';
+    btn.disabled = true;
+    const res = document.getElementById('result');
+    res.style.display = 'none';
+
+    try {{
+      const r = await fetch('/manual', {{ method: 'POST', body: new FormData(e.target) }});
+      const json = await r.json();
+      res.className = 'success';
+      res.innerHTML = '<strong>✅ 受付完了！</strong><br>' +
+        json.topic + '（' + json.date + '）のナレッジ化を開始しました。<br>2〜3分後にDiscordをご確認ください。';
+    }} catch (err) {{
+      res.className = 'error';
+      res.innerHTML = '<strong>❌ エラー</strong><br>' + err.message;
+    }}
+    res.style.display = 'block';
+    btn.textContent = 'ナレッジ化して Discord に通知';
+    btn.disabled = false;
+  }});
+</script>
+</body>
+</html>"""
+
+
+@app.get("/manual", response_class=HTMLResponse)
+async def manual_form():
+    """録画なし手動入力フォームを表示"""
+    return MANUAL_FORM_HTML
+
+
+@app.post("/manual")
+async def manual_input(
+    background_tasks: BackgroundTasks,
+    topic: str = Form(...),
+    transcript: str = Form(...),
+    date: str = Form(None),
+    duration: int = Form(60),
+):
+    """Zoomの文字起こしを直接受け取ってナレッジ化（録画なし対応）"""
+    date_str = date or datetime.now().strftime("%Y-%m-%d")
+
+    # VTT形式かどうか自動判定して変換
+    if "WEBVTT" in transcript or " --> " in transcript:
+        transcript = parse_vtt(transcript)
+        logger.info("VTT形式を検出 → プレーンテキストに変換しました")
+
+    if not transcript.strip():
+        raise HTTPException(status_code=400, detail="文字起こしテキストが空です")
+
+    background_tasks.add_task(process_manual_input, topic, transcript, date_str, duration)
+    logger.info(f"手動入力受付: {topic} ({date_str})")
+    return JSONResponse({"message": "受付しました", "topic": topic, "date": date_str})
+
+
+async def process_manual_input(topic: str, transcript: str, date_str: str, duration: int):
+    """Whisperをスキップしてナレッジ化パイプラインを実行"""
+    try:
+        participant_name = _extract_participant_name(topic)
+        logger.info(f"手動処理開始: {topic} ({duration}分) [{date_str}]")
+
+        # Step1: Claudeでナレッジ化
+        knowledge = await generate_knowledge(transcript, topic, duration)
+
+        # Step2: Notionに保存
+        notion_url = await save_to_notion(
+            topic=topic, host="(手動入力)",
+            start_at=date_str, duration=duration,
+            transcript=transcript, knowledge=knowledge
+        )
+
+        # Step3: HTMLレポート生成
+        html = await generate_html_report(
+            transcript=transcript, topic=topic,
+            host="(手動入力)", date=date_str, duration=duration
+        )
+
+        # Step4: surge.shにデプロイ
+        surge_url = ""
+        if SURGE_TOKEN and html:
+            surge_url = await deploy_to_surge(html, topic, date_str, participant_name)
+
+        # Step5: Discordに通知
+        await send_to_discord(
+            topic=topic, date=date_str,
+            surge_url=surge_url or "(デプロイ未設定)",
+            notion_url=notion_url
+        )
+
+        # Step6: ローカル保存
+        save_to_local_knowledge(
+            topic=topic, date=date_str, host="(手動入力)", duration=duration,
+            transcript=transcript, knowledge=knowledge, surge_url=surge_url
+        )
+
+        logger.info(f"手動処理完了: surge={surge_url} notion={notion_url}")
+
+    except Exception as e:
+        logger.error(f"手動処理エラー: {e}", exc_info=True)
 
 
 # ─── ヘルスチェック ────────────────────────────────────────────
