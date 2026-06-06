@@ -42,6 +42,19 @@ LOCAL_KNOWLEDGE_DIR   = os.getenv(
 )
 
 
+# ─── 重複処理防止（録画あり/なし の二重処理を防ぐ） ───────────
+_processed_meetings: dict = {}  # meeting_id → datetime
+
+def _try_claim_meeting(meeting_id: str) -> bool:
+    """このミーティングの処理権を先着1件だけ取得する。
+    recording.completed と meeting.ended が両方来ても1回だけ処理される。"""
+    if meeting_id in _processed_meetings:
+        logger.info(f"スキップ（処理済み）: {meeting_id}")
+        return False
+    _processed_meetings[meeting_id] = datetime.utcnow()
+    return True
+
+
 # ─── Zoom Webhook受信 ─────────────────────────────────────────
 @app.post("/webhook/zoom")
 async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
@@ -70,6 +83,11 @@ async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_recording, data)
         return JSONResponse({"message": "accepted"})
 
+    if event == "meeting.ended":
+        # 録画なしの場合の自動ナレッジ化（8分後に判定）
+        background_tasks.add_task(process_meeting_ended_deferred, data)
+        return JSONResponse({"message": "accepted"})
+
     return JSONResponse({"message": "ignored"})
 
 
@@ -89,7 +107,12 @@ async def process_recording(data: dict):
     """録画完了イベントを受け取りナレッジ化する"""
     try:
         payload      = data["payload"]["object"]
+        meeting_id   = str(payload.get("id", ""))
         topic        = payload.get("topic", "無題ミーティング")
+
+        # 重複処理防止（meeting.ended側が先に処理した場合はスキップ）
+        if meeting_id and not _try_claim_meeting(meeting_id):
+            return
         host         = payload.get("host_email", "不明")
         duration     = payload.get("duration", 0)
         start_at     = payload.get("start_time", "")
@@ -164,6 +187,103 @@ async def process_recording(data: dict):
         # 一時ファイル削除
         if "audio_path" in locals():
             Path(audio_path).unlink(missing_ok=True)
+
+
+async def process_meeting_ended_deferred(data: dict):
+    """meeting.ended イベント受信 → 8分待って録画なしと判断したらナレッジ化"""
+    payload    = data["payload"]["object"]
+    meeting_id = str(payload.get("id", ""))
+    topic      = payload.get("topic", "無題ミーティング")
+    duration   = payload.get("duration", 0)
+    start_time = payload.get("start_time", "")
+    date_str   = start_time[:10] if start_time else datetime.now().strftime("%Y-%m-%d")
+
+    logger.info(f"meeting.ended 受信: {topic} ({meeting_id}) — 8分後に録画有無を確認します")
+
+    # 8分待つ（録画がある場合はこの間に recording.completed → _try_claim_meeting が先に処理）
+    await asyncio.sleep(480)
+
+    # 既に processing.completed 側で処理済みならスキップ
+    if not _try_claim_meeting(meeting_id):
+        logger.info(f"録画あり → 既に処理済みのためスキップ: {topic}")
+        return
+
+    logger.info(f"録画なしと判断 → トランスクリプト取得開始: {topic}")
+    token = await _get_zoom_access_token()
+
+    # ① Zoom API でトランスクリプト（VTTファイル）を試みる
+    transcript = await _fetch_zoom_transcript(meeting_id, token)
+
+    # ② なければ AI Companion サマリーを試みる
+    if not transcript:
+        transcript = await _fetch_ai_companion_summary(meeting_id, token)
+
+    if not transcript:
+        logger.warning(f"トランスクリプト取得できず（録画もなし）: {topic} — スキップ")
+        return
+
+    logger.info(f"トランスクリプト取得成功 ({len(transcript)}文字) → パイプライン開始")
+    await process_manual_input(topic, transcript, date_str, duration)
+
+
+async def _fetch_zoom_transcript(meeting_id: str, token: str) -> str:
+    """Zoom録画APIからトランスクリプト（VTT）を取得してプレーンテキストに変換"""
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(
+                f"https://api.zoom.us/v2/meetings/{meeting_id}/recordings",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if not r.is_success:
+                logger.info(f"録画API: {r.status_code} — トランスクリプトなし")
+                return ""
+            files = r.json().get("recording_files", [])
+            for f in files:
+                if f.get("file_type") == "TRANSCRIPT" and f.get("status") == "completed":
+                    vtt_url = f["download_url"]
+                    vr = await client.get(
+                        vtt_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                        follow_redirects=True,
+                    )
+                    if vr.is_success:
+                        text = parse_vtt(vr.text)
+                        logger.info(f"ZoomトランスクリプトVTT取得成功: {len(text)}文字")
+                        return text
+    except Exception as e:
+        logger.warning(f"_fetch_zoom_transcript エラー: {e}")
+    return ""
+
+
+async def _fetch_ai_companion_summary(meeting_id: str, token: str) -> str:
+    """Zoom AI Companion のミーティングサマリーを取得"""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"https://api.zoom.us/v2/meetings/{meeting_id}/meeting_summary",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if not r.is_success:
+                logger.info(f"AI Companion API: {r.status_code} — サマリーなし（未対応プランの可能性）")
+                return ""
+            d = r.json()
+            parts = []
+            if d.get("summary_overview"):
+                parts.append(d["summary_overview"])
+            for item in d.get("summary_details", []):
+                label   = item.get("summary_title", "")
+                summary = item.get("summary", "")
+                if label and summary:
+                    parts.append(f"【{label}】\n{summary}")
+                elif summary:
+                    parts.append(summary)
+            result = "\n\n".join(parts)
+            if result:
+                logger.info(f"AI Companion サマリー取得成功: {len(result)}文字")
+            return result
+    except Exception as e:
+        logger.warning(f"_fetch_ai_companion_summary エラー: {e}")
+    return ""
 
 
 def _extract_participant_name(topic: str) -> str:
