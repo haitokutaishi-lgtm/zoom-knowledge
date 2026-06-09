@@ -964,6 +964,148 @@ async def process_manual_input(topic: str, transcript: str, date_str: str, durat
         logger.error(f"手動処理エラー: {e}", exc_info=True)
 
 
+# ─── 定期ポーリング（Webhook 未着時の自動バックアップ） ────────
+@app.on_event("startup")
+async def start_periodic_poller():
+    """サーバー起動時にバックグラウンドポーラーを開始"""
+    asyncio.create_task(_recording_poller_loop())
+
+
+async def _recording_poller_loop():
+    """1時間おきに未処理録画をチェックして自動処理"""
+    await asyncio.sleep(60)  # 起動直後は1分待つ
+    while True:
+        try:
+            logger.info("⏰ 定期チェック開始")
+            await _check_and_process_pending()
+        except Exception as e:
+            logger.error(f"定期チェックエラー: {e}", exc_info=True)
+        await asyncio.sleep(3600)  # 1時間ごと
+
+
+async def _check_and_process_pending():
+    """過去7日間の録画で未処理のものを検出して処理"""
+    import re
+    from datetime import timedelta
+
+    today    = datetime.utcnow()
+    from_dt  = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+    to_dt    = today.strftime("%Y-%m-%d")
+
+    token = await _get_zoom_access_token()
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(
+            "https://api.zoom.us/v2/users/me/recordings",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"from": from_dt, "to": to_dt, "page_size": 30},
+        )
+        if not r.is_success:
+            logger.warning(f"録画一覧取得失敗: {r.status_code}")
+            return
+
+        meetings = r.json().get("meetings", [])
+        logger.info(f"録画件数: {len(meetings)}件")
+
+        for meeting in meetings:
+            topic      = meeting.get("topic", "")
+            meeting_id = str(meeting.get("id", ""))
+            start_time = meeting.get("start_time", "")
+            date_str   = start_time[:10]
+            duration   = meeting.get("duration", 0)
+            files      = meeting.get("recording_files", [])
+
+            # M4A完了ファイルがない録画はスキップ
+            m4a = next((f for f in files if f.get("file_type") == "M4A"
+                        and f.get("status") == "completed"), None)
+            if not m4a:
+                continue
+
+            # surge URL が既に存在する → 処理済みとみなしスキップ
+            name = _extract_participant_name(topic)
+            slug = re.sub(r'[^a-zA-Z0-9]', '-', name)
+            slug = re.sub(r'-+', '-', slug)[:30].strip('-').lower() or "meeting"
+            expected_url = f"https://1on1-{date_str}-{slug}.surge.sh"
+
+            try:
+                async with httpx.AsyncClient(timeout=8) as hc:
+                    hr = await hc.head(expected_url, follow_redirects=True)
+                    if hr.status_code == 200:
+                        logger.info(f"処理済みスキップ: {topic}")
+                        continue
+            except Exception:
+                pass  # チェック失敗なら処理を試みる
+
+            # 処理権取得（重複防止）
+            if not _try_claim_meeting(meeting_id):
+                continue
+
+            logger.info(f"未処理録画を発見 → 処理開始: {topic} ({date_str})")
+            asyncio.create_task(_process_from_api(meeting, token))
+
+
+async def _process_from_api(meeting: dict, token: str):
+    """Zoom APIから録画をダウンロードしてパイプライン実行"""
+    topic      = meeting.get("topic", "")
+    duration   = meeting.get("duration", 0)
+    start_time = meeting.get("start_time", "")
+    date_str   = start_time[:10]
+    files      = meeting.get("recording_files", [])
+    name       = _extract_participant_name(topic)
+
+    audio_path = None
+    try:
+        m4a = next((f for f in files if f.get("file_type") == "M4A"
+                    and f.get("status") == "completed"), None)
+        if not m4a:
+            return
+
+        # 音声ダウンロード
+        logger.info(f"音声ダウンロード中: {topic}")
+        async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+            dl = await client.get(
+                m4a["download_url"] + f"?access_token={token}"
+            )
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".m4a")
+            tmp.write(dl.content)
+            tmp.close()
+            audio_path = tmp.name
+
+        transcript = await transcribe_audio(audio_path)
+        knowledge  = await generate_knowledge(transcript, topic, duration)
+        notion_url = await save_to_notion(
+            topic=topic, host="", start_at=start_time,
+            duration=duration, transcript=transcript, knowledge=knowledge,
+        )
+        html = await generate_html_report(
+            transcript=transcript, topic=topic,
+            host="", date=date_str, duration=duration,
+        )
+        surge_url = await deploy_to_surge(html, topic, date_str, name) if SURGE_TOKEN else ""
+        await send_to_discord(
+            topic=topic, date=date_str,
+            surge_url=surge_url or "(デプロイ未設定)",
+            notion_url=notion_url,
+        )
+        save_to_local_knowledge(
+            topic=topic, date=date_str, host="", duration=duration,
+            transcript=transcript, knowledge=knowledge, surge_url=surge_url,
+        )
+        logger.info(f"自動処理完了: {topic} → {surge_url}")
+
+    except Exception as e:
+        logger.error(f"_process_from_api エラー: {e}", exc_info=True)
+    finally:
+        if audio_path:
+            Path(audio_path).unlink(missing_ok=True)
+
+
+@app.post("/process-pending")
+async def process_pending_endpoint(background_tasks: BackgroundTasks):
+    """未処理録画を今すぐチェック（手動トリガー）"""
+    background_tasks.add_task(_check_and_process_pending)
+    return JSONResponse({"message": "チェック開始。2〜5分後にDiscordをご確認ください。"})
+
+
 # ─── ヘルスチェック ────────────────────────────────────────────
 @app.get("/")
 async def health():
