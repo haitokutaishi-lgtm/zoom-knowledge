@@ -36,6 +36,7 @@ NOTION_API_KEY        = os.getenv("NOTION_API_KEY", "")
 NOTION_DATABASE_ID    = os.getenv("NOTION_DATABASE_ID", "")
 DISCORD_WEBHOOK_URL   = os.getenv("DISCORD_WEBHOOK_URL", "")
 SURGE_TOKEN           = os.getenv("SURGE_TOKEN", "")
+CRON_SECRET           = os.getenv("CRON_SECRET", "")   # 外部cronサービス認証用
 LOCAL_KNOWLEDGE_DIR   = os.getenv(
     "LOCAL_KNOWLEDGE_DIR",
     str(Path.home() / "Downloads" / "claude作業フォルダ" / "ナレッジ" / "Zoomセッション記録")
@@ -1100,8 +1101,16 @@ async def _process_from_api(meeting: dict, token: str):
 
 
 @app.post("/process-pending")
-async def process_pending_endpoint(background_tasks: BackgroundTasks):
-    """未処理録画を今すぐチェック（手動トリガー）"""
+async def process_pending_endpoint(
+    background_tasks: BackgroundTasks,
+    request: Request,
+):
+    """未処理録画を今すぐチェック（外部cronまたは手動トリガー）"""
+    # CRON_SECRETが設定されている場合は認証チェック
+    if CRON_SECRET:
+        auth = request.headers.get("x-cron-secret", "")
+        if auth != CRON_SECRET:
+            raise HTTPException(status_code=401, detail="Unauthorized")
     background_tasks.add_task(_check_and_process_pending)
     return JSONResponse({"message": "チェック開始。2〜5分後にDiscordをご確認ください。"})
 
