@@ -1,0 +1,8 @@
+.env
+*.pyc
+__pycache__/
+*.tmp
+*.mp3
+*.m4a
+node_modules/
+.DS_Store

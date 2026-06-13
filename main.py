@@ -346,20 +346,42 @@ async def download_recording(url: str, token: str) -> str:
 
 # ─── Step2: Whisper文字起こし ──────────────────────────────────
 async def transcribe_audio(audio_path: str) -> str:
-    """OpenAI Whisper APIで文字起こし"""
+    """OpenAI Whisper APIで文字起こし（25MB超は自動ffmpeg圧縮）"""
+    import subprocess
     logger.info("文字起こし中...")
-    async with httpx.AsyncClient(timeout=600) as client:
-        with open(audio_path, "rb") as f:
-            r = await client.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                files={"file": (Path(audio_path).name, f, "audio/mpeg")},
-                data={"model": "whisper-1", "language": "ja", "response_format": "text"},
-            )
-            r.raise_for_status()
-            transcript = r.text
-            logger.info(f"文字起こし完了: {len(transcript)}文字")
-            return transcript
+    send_path = audio_path
+    compressed_tmp = None
+    size_mb = Path(audio_path).stat().st_size / (1024 * 1024)
+    if size_mb > 24:
+        logger.info(f"ファイルサイズ {size_mb:.1f}MB → ffmpegで圧縮中...")
+        compressed_tmp = audio_path.rsplit(".", 1)[0] + "_compressed.mp3"
+        result = subprocess.run(
+            ["ffmpeg", "-i", audio_path, "-vn", "-ar", "16000", "-ac", "1", "-b:a", "32k", compressed_tmp, "-y"],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            logger.warning(f"ffmpeg圧縮失敗: {result.stderr[:200]}")
+            compressed_tmp = None
+        else:
+            compressed_size = Path(compressed_tmp).stat().st_size / (1024 * 1024)
+            logger.info(f"圧縮完了: {size_mb:.1f}MB → {compressed_size:.1f}MB")
+            send_path = compressed_tmp
+    try:
+        async with httpx.AsyncClient(timeout=600) as client:
+            with open(send_path, "rb") as f:
+                r = await client.post(
+                    "https://api.openai.com/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                    files={"file": (Path(send_path).name, f, "audio/mpeg")},
+                    data={"model": "whisper-1", "language": "ja", "response_format": "text"},
+                )
+                r.raise_for_status()
+                transcript = r.text
+                logger.info(f"文字起こし完了: {len(transcript)}文字")
+                return transcript
+    finally:
+        if compressed_tmp:
+            Path(compressed_tmp).unlink(missing_ok=True)
 
 
 # ─── Step3: Claudeでナレッジ化 ────────────────────────────────
