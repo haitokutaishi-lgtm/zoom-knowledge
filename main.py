@@ -43,6 +43,13 @@ LOCAL_KNOWLEDGE_DIR   = os.getenv(
 )
 
 
+# ─── 処理対象外トピック ───────────────────────────────────────
+SKIP_TOPIC_KEYWORDS = ["背徳タイシ"]
+
+def _is_skip_topic(topic: str) -> bool:
+    return any(kw in topic for kw in SKIP_TOPIC_KEYWORDS)
+
+
 # ─── 重複処理防止（録画あり/なし の二重処理を防ぐ） ───────────
 _processed_meetings: dict = {}  # meeting_id → datetime
 
@@ -110,6 +117,11 @@ async def process_recording(data: dict):
         payload      = data["payload"]["object"]
         meeting_id   = str(payload.get("id", ""))
         topic        = payload.get("topic", "無題ミーティング")
+
+        # 対象外トピックはスキップ
+        if _is_skip_topic(topic):
+            logger.info(f"スキップ（対象外トピック）: {topic}")
+            return
 
         # 重複処理防止（meeting.ended側が先に処理した場合はスキップ）
         if meeting_id and not _try_claim_meeting(meeting_id):
@@ -1036,6 +1048,11 @@ async def _check_and_process_pending():
             date_str   = start_time[:10]
             duration   = meeting.get("duration", 0)
             files      = meeting.get("recording_files", [])
+
+            # 対象外トピックはスキップ
+            if _is_skip_topic(topic):
+                logger.info(f"スキップ（対象外トピック）: {topic}")
+                continue
 
             # M4A完了ファイルがない録画はスキップ
             m4a = next((f for f in files if f.get("file_type") == "M4A"
