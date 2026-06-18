@@ -1,5 +1,8 @@
 providers = ["node", "python"]
 
+[phases.setup]
+nixPkgs = ["ffmpeg"]
+
 [phases.build]
 cmds = [
   "npm install",
