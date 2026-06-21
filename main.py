@@ -446,7 +446,7 @@ async def generate_knowledge(transcript: str, topic: str, duration: int) -> str:
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-opus-4-5",
+                "model": "claude-haiku-4-5",
                 "max_tokens": 2048,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -641,7 +641,7 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-opus-4-5",
+                "model": "claude-haiku-4-5",
                 "max_tokens": 4096,
                 "messages": [{"role": "user", "content": prompt}],
             },
