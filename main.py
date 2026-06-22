@@ -1170,12 +1170,15 @@ async def _process_from_api(meeting: dict, token: str):
         if not m4a:
             return
 
-        # 音声ダウンロード
+        # 音声ダウンロード（トークンは1時間で失効するため直前に再取得）
         logger.info(f"音声ダウンロード中: {topic}")
+        fresh_token = await _get_zoom_access_token()
         async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
             dl = await client.get(
-                m4a["download_url"] + f"?access_token={token}"
+                m4a["download_url"] + f"?access_token={fresh_token}"
             )
+            if not dl.is_success:
+                raise RuntimeError(f"音声ダウンロード失敗: HTTP {dl.status_code}")
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".m4a")
             tmp.write(dl.content)
             tmp.close()
