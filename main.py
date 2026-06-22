@@ -42,6 +42,39 @@ LOCAL_KNOWLEDGE_DIR   = os.getenv(
     str(Path.home() / "Downloads" / "claude作業フォルダ" / "ナレッジ" / "Zoomセッション記録")
 )
 
+# ─── ローカルLLM（無償運用モード） ──────────────────────────────
+USE_LOCAL_LLM      = os.getenv("USE_LOCAL_LLM", "false").lower() == "true"
+OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "medium")
+
+_whisper_model = None
+
+def _get_whisper_model():
+    """faster-whisperモデルを遅延ロード（初回のみ）"""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        logger.info(f"faster-whisperモデル読み込み中... ({WHISPER_MODEL_SIZE})")
+        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+async def _ollama_generate(prompt: str, max_tokens: int = 2048) -> str:
+    """OllamaでローカルLLM推論"""
+    async with httpx.AsyncClient(timeout=300) as client:
+        r = await client.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": max_tokens},
+            },
+        )
+        r.raise_for_status()
+        return r.json()["response"].strip()
+
 
 # ─── 処理対象外トピック ───────────────────────────────────────
 SKIP_TOPIC_KEYWORDS = ["背徳タイシ"]
@@ -358,6 +391,28 @@ async def download_recording(url: str, token: str) -> str:
 
 # ─── Step2: Whisper文字起こし ──────────────────────────────────
 async def transcribe_audio(audio_path: str) -> str:
+    """音声を文字起こし（USE_LOCAL_LLM=trueならfaster-whisperでローカル実行）"""
+    if USE_LOCAL_LLM:
+        return await _transcribe_local(audio_path)
+    return await _transcribe_openai(audio_path)
+
+
+async def _transcribe_local(audio_path: str) -> str:
+    """faster-whisperでローカル文字起こし（無償）"""
+    logger.info("文字起こし中（ローカルWhisper）...")
+
+    def _run():
+        model = _get_whisper_model()
+        segments, _info = model.transcribe(audio_path, language="ja", beam_size=5)
+        return "".join(seg.text for seg in segments)
+
+    loop = asyncio.get_event_loop()
+    transcript = await loop.run_in_executor(None, _run)
+    logger.info(f"文字起こし完了: {len(transcript)}文字")
+    return transcript
+
+
+async def _transcribe_openai(audio_path: str) -> str:
     """OpenAI Whisper APIで文字起こし（25MB超は自動ffmpeg圧縮）"""
     import subprocess
     logger.info("文字起こし中...")
@@ -430,13 +485,17 @@ KNOWLEDGE_PROMPT = """
 
 
 async def generate_knowledge(transcript: str, topic: str, duration: int) -> str:
-    """Claude APIでナレッジ構造化"""
+    """ナレッジ構造化（USE_LOCAL_LLM=trueならOllamaでローカル実行）"""
     logger.info("ナレッジ生成中...")
     prompt = KNOWLEDGE_PROMPT.format(
         topic=topic,
         duration=duration,
         transcript=transcript[:8000]  # 長すぎる場合は先頭8000文字
     )
+    if USE_LOCAL_LLM:
+        knowledge = await _ollama_generate(prompt, max_tokens=2048)
+        logger.info("ナレッジ生成完了（ローカルLLM）")
+        return knowledge
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -626,12 +685,20 @@ HTML_REPORT_PROMPT = """
 
 
 async def generate_html_report(transcript: str, topic: str, host: str, date: str, duration: int) -> str:
-    """ClaudeでHTMLレポートを生成"""
+    """HTMLレポートを生成（USE_LOCAL_LLM=trueならOllamaでローカル実行）"""
     logger.info("HTMLレポート生成中...")
     prompt = HTML_REPORT_PROMPT.format(
         topic=topic, host=host, date=date, duration=duration,
         transcript=transcript[:8000]
     )
+    if USE_LOCAL_LLM:
+        html = await _ollama_generate(prompt, max_tokens=4096)
+        if html.startswith("```"):
+            html = html.split("```")[1]
+            if html.startswith("html"):
+                html = html[4:]
+        logger.info("HTMLレポート生成完了（ローカルLLM）")
+        return html.strip()
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -1080,7 +1147,11 @@ async def _check_and_process_pending():
                 continue
 
             logger.info(f"未処理録画を発見 → 処理開始: {topic} ({date_str})")
-            asyncio.create_task(_process_from_api(meeting, token))
+            # ローカルLLM使用時はCPU/メモリ競合を避けるため1件ずつ順番に処理する
+            if USE_LOCAL_LLM:
+                await _process_from_api(meeting, token)
+            else:
+                asyncio.create_task(_process_from_api(meeting, token))
 
 
 async def _process_from_api(meeting: dict, token: str):
