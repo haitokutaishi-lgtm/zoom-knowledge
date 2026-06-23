@@ -6,3 +6,6 @@ __pycache__/
 *.m4a
 node_modules/
 .DS_Store
+*.lock
+local_runner.log
+local_runner.error.log
