@@ -69,7 +69,9 @@ async def _ollama_generate(prompt: str, max_tokens: int = 2048) -> str:
                 "model": OLLAMA_MODEL,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"num_predict": max_tokens},
+                # num_ctxを明示しないとデフォルト4096になり、長い書き起こし入力だけで
+                # コンテキストを使い切って出力が薄くなるため拡大しておく
+                "options": {"num_predict": max_tokens, "num_ctx": 16384},
             },
         )
         r.raise_for_status()
@@ -454,13 +456,18 @@ async def _transcribe_openai(audio_path: str) -> str:
 # ─── Step3: Claudeでナレッジ化 ────────────────────────────────
 KNOWLEDGE_PROMPT = """
 あなたはビジネスコンサルタントです。
-以下のミーティング書き起こしを読み、商品・サービス開発に活用できるナレッジとして構造化してください。
+以下のミーティング書き起こし全体を読み、商品・サービス開発に活用できるナレッジとして構造化してください。
+
+このナレッジは、後で本人やチームが「会議で何を話したか」を振り返るための記録です。
+要約しすぎて情報を削るのではなく、書き起こしに出てきた発言・具体例・数字・固有名詞をできるだけ漏れなく反映し、
+読み返したときに会議の流れと内容が具体的に再現できるレベルの網羅性で書いてください。
+箇条書きは1〜2行の短文で済ませず、誰が・何を・なぜ言ったのかが分かる具体的な記述にしてください。
 
 # ミーティング情報
 タイトル: {topic}
 時間: {duration}分
 
-# 書き起こし
+# 書き起こし（全文）
 {transcript}
 
 ---
@@ -468,16 +475,20 @@ KNOWLEDGE_PROMPT = """
 以下の形式で日本語でまとめてください：
 
 ## 📋 ミーティング概要
-（誰と何を話したか、3〜5行）
+（誰と何を話したか、話の流れに沿って5〜8行で具体的に）
+
+## 🗣️ 話した内容の詳細
+（書き起こしに出てきた論点・トピックごとに、発言内容や具体例を漏れなく箇条書き。
+　話題が複数あれば見出しを分けて、それぞれ3〜6項目程度の具体的な記述にする）
 
 ## 😤 顧客の課題・ペイン
-（顧客が困っていること、不満点を箇条書き）
+（顧客が困っていること、不満点を、発言の背景や理由も含めて箇条書き）
 
 ## 💡 拾えるニーズ・アイデア
-（提供できる価値、改善のヒント、新商品アイデアを箇条書き）
+（提供できる価値、改善のヒント、新商品アイデアを、根拠となった発言と合わせて箇条書き）
 
 ## ✅ アクションアイテム
-（次にやるべきことを [ ] チェックボックス形式で）
+（次にやるべきことを [ ] チェックボックス形式で、担当や期限が話に出ていればそれも含めて）
 
 ## 🔑 キーワード
 （重要なキーワードを5〜10個、カンマ区切り）
@@ -490,10 +501,10 @@ async def generate_knowledge(transcript: str, topic: str, duration: int) -> str:
     prompt = KNOWLEDGE_PROMPT.format(
         topic=topic,
         duration=duration,
-        transcript=transcript[:8000]  # 長すぎる場合は先頭8000文字
+        transcript=transcript[:12000]  # 長すぎる場合は先頭12000文字
     )
     if USE_LOCAL_LLM:
-        knowledge = await _ollama_generate(prompt, max_tokens=2048)
+        knowledge = await _ollama_generate(prompt, max_tokens=3072)
         logger.info("ナレッジ生成完了（ローカルLLM）")
         return knowledge
     async with httpx.AsyncClient(timeout=120) as client:
@@ -625,6 +636,11 @@ HTML_REPORT_PROMPT = """
 - 励ましと感謝の気持ちを込める
 - 箇条書きも「・〜していただく」「・〜されることをおすすめします」のような丁寧な表現で
 
+# 重要：内容の密度
+- このレポートは受講生が後で読み返して「あの日何を話したか」を振り返るための記録であり、お客様にも見せる完成品です。要約しすぎず、書き起こしに出てきた発言・具体例・数字・固有名詞を漏れなく反映してください。
+- 「②本日ご確認いただいた内容」は1〜2行の箇条書きで済ませず、話題ごとに見出しを分け、各話題で3〜6項目程度、背景や理由も含めた具体的な記述にしてください。
+- 「④次回までのアクション」も、話の中で出た具体的な理由・期限・背景を添えてください。
+
 # ミーティング情報
 タイトル: {topic}
 日時: {date}
@@ -659,6 +675,7 @@ HTML_REPORT_PROMPT = """
   .badge-high {{ background: #fed7d7; color: #c53030; }}
   .badge-mid  {{ background: #feebc8; color: #c05621; }}
   .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 20px 24px; border-radius: 8px; line-height: 1.9; }}
+  .signature {{ text-align: right; margin: 12px 0 0; font-weight: bold; color: #2f855a; }}
   .footer {{ text-align: center; color: #aaa; font-size: 0.78em; margin-top: 28px; padding-top: 16px; border-top: 1px solid #eee; }}
 </style>
 </head>
@@ -670,11 +687,19 @@ HTML_REPORT_PROMPT = """
 </div>
 
 <!-- 書き起こしをもとに以下のセクションをすべて生成してください -->
-<!-- ① 今回のセッションについて（概要・目的、2〜3文） -->
-<!-- ② 本日ご確認いただいた内容（主な議論、箇条書き、丁寧語） -->
-<!-- ③ 決定事項・方針（合意した内容） -->
-<!-- ④ 次回までのアクション（action-high/action-midクラスで優先度を視覚化、丁寧語） -->
-<!-- ⑤ タイシからのメッセージ（messageクラス、温かく励ます文章、敬語、「タイシより」で締める） -->
+<!-- ① 今回のセッションについて（概要・目的、3〜5文で具体的に） -->
+<!-- ② 本日ご確認いただいた内容（話題ごとに見出しを分け、各話題3〜6項目の具体的な箇条書き、丁寧語。要約しすぎず書き起こしの発言・数字・固有名詞を漏れなく反映し、後で読み返して内容が再現できる密度にする） -->
+<!-- ③ 決定事項・方針（合意した内容、なぜそう決めたかの背景も） -->
+<!-- ④ 次回までのアクション（丁寧語、理由や期限も添える）。
+     各アクションは必ず次の構造で出力すること（liの入れ子は禁止、action-itemは div のみに使う）：
+     <div class="action-item action-high"><span class="badge badge-high">優先度高</span><p>具体的なアクション内容</p></div>
+     <div class="action-item action-mid"><span class="badge badge-mid">優先度中</span><p>具体的なアクション内容</p></div> -->
+<!-- ⑤ タイシからのメッセージ（messageクラス、250〜400文字程度）
+     書き起こしの中で本人が話した努力・工夫・成長・苦労を最低1つ具体的に引用し、それに対して全力で称賛してください。
+     「素晴らしいです」「感動しました」程度の控えめな表現では不十分です。「！」を使い、熱量の高い言葉
+     （例：「本当にすごいことです」「その粘り強さこそが合格者の共通点です」「ここまでやり切ったあなたを誇りに思います」
+     のようなレベルの熱さ）で、読んだ瞬間に気持ちが上がるトーンにしてください。
+     最後は今回の話に即した一言の期待・激励を添えて、<p class="signature">タイシより</p> で締める（badgeクラスなど他の用途のクラスを「タイシより」に付けないこと）。 -->
 
 <div class="footer">
   <p>本レポートはセッション内容をもとに作成しております。ご不明な点がございましたらお気軽にご連絡ください。</p>
@@ -689,10 +714,10 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
     logger.info("HTMLレポート生成中...")
     prompt = HTML_REPORT_PROMPT.format(
         topic=topic, host=host, date=date, duration=duration,
-        transcript=transcript[:8000]
+        transcript=transcript[:12000]
     )
     if USE_LOCAL_LLM:
-        html = await _ollama_generate(prompt, max_tokens=4096)
+        html = await _ollama_generate(prompt, max_tokens=6144)
         if html.startswith("```"):
             html = html.split("```")[1]
             if html.startswith("html"):
