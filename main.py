@@ -62,7 +62,7 @@ def _get_whisper_model():
 
 async def _ollama_generate(prompt: str, max_tokens: int = 2048) -> str:
     """OllamaでローカルLLM推論"""
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=900) as client:
         r = await client.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={
