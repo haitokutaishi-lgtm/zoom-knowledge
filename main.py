@@ -729,6 +729,16 @@ HTML_REPORT_PROMPT = """
 """
 
 
+def _fix_priority_badges(html: str) -> str:
+    """優先度バッジの表示テキストは固定文言のため、LLMが何を生成しても強制的に上書きする。
+    （小型ローカルモデルだとbadge-high/badge-midのクラス名から英単語priorityを連想し、
+    「優 priority中」のように日英混在の文字列を生成することがあるため）"""
+    import re
+    html = re.sub(r'(<span class="[^"]*badge-high[^"]*">)[^<]*(</span>)', r"\g<1>優先度高\g<2>", html)
+    html = re.sub(r'(<span class="[^"]*badge-mid[^"]*">)[^<]*(</span>)', r"\g<1>優先度中\g<2>", html)
+    return html
+
+
 async def generate_html_report(transcript: str, topic: str, host: str, date: str, duration: int) -> str:
     """HTMLレポートを生成（USE_LOCAL_LLM=trueならOllamaでローカル実行）"""
     logger.info("HTMLレポート生成中...")
@@ -749,6 +759,7 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
         # 「！」を熱量表現に使う指示の副作用で文頭に意味のない「！」が付くことがあるため除去する
         import re
         html = re.sub(r"(<p[^>]*>)\s*！\s*", r"\1", html)
+        html = _fix_priority_badges(html)
         logger.info("HTMLレポート生成完了（ローカルLLM）")
         return html.strip()
     async with httpx.AsyncClient(timeout=120) as client:
@@ -772,6 +783,7 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
             html = "\n".join(html.split("\n")[1:])
         if html.endswith("```"):
             html = "\n".join(html.split("\n")[:-1])
+        html = _fix_priority_badges(html)
         logger.info("HTMLレポート生成完了")
         return html
 
