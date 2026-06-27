@@ -37,6 +37,7 @@ NOTION_DATABASE_ID    = os.getenv("NOTION_DATABASE_ID", "")
 DISCORD_WEBHOOK_URL   = os.getenv("DISCORD_WEBHOOK_URL", "")
 SURGE_TOKEN           = os.getenv("SURGE_TOKEN", "")
 CRON_SECRET           = os.getenv("CRON_SECRET", "")   # 外部cronサービス認証用
+COACHING_DATABASE_URL = os.getenv("COACHING_DATABASE_URL", "")  # coaching-tool（Neon）への同期用
 LOCAL_KNOWLEDGE_DIR   = os.getenv(
     "LOCAL_KNOWLEDGE_DIR",
     str(Path.home() / "Downloads" / "claude作業フォルダ" / "ナレッジ" / "Zoomセッション記録")
@@ -226,6 +227,9 @@ async def process_recording(data: dict):
             topic=topic, date=date_str, host=host, duration=duration,
             transcript=transcript, knowledge=knowledge, surge_url=surge_url
         )
+
+        # Step9: coaching-tool（Neon DB）に同期（クライアント特定できた場合のみ）
+        await sync_to_coaching_db(topic=topic, date=date_str, knowledge=knowledge, report_url=surge_url)
 
         logger.info(f"全処理完了: surge={surge_url} notion={notion_url}")
 
@@ -900,6 +904,147 @@ async def send_to_discord(topic: str, date: str, surge_url: str, notion_url: str
         logger.info("Discord通知送信完了")
 
 
+# ─── coaching-tool（Neon DB）への同期 ─────────────────────────
+# トピック文字列に含まれるキーワードでクライアントを特定する。
+# 複数の表記ゆれ（漢字・ローマ字・discord名）があるため、キーワードは1人につき複数登録できる。
+CLIENT_KEYWORDS: dict[int, list[str]] = {
+    1:  ["ゆゆ"],
+    2:  ["saori"],
+    3:  ["やまし"],
+    4:  ["NAOKI", "naoki"],
+    5:  ["あずき"],
+    7:  ["kizuku", "Kizuku", "kizku"],
+    8:  ["ケンテイ"],
+    9:  ["ゆうき", "yuuki", "ユウキ"],
+    10: ["ひなの"],
+    11: ["なむなむ"],
+    12: ["佐藤"],
+    13: ["hiromi3588"],
+    14: ["YAMA", "CAMP YAMA"],
+    15: ["Haruka Makino", "はるか", "牧野はるか", "CAMP はるか"],
+    16: ["erika"],
+    17: ["りょう"],
+    18: ["KS"],
+    19: ["Sato"],
+    20: ["新昌靜", "しょうせい"],
+    21: ["りんたろう"],
+    22: ["Kobayashi Takahiro", "TAKAHIRO KOBAYASHI", "小林", "たか"],
+    23: ["山田", "yamada", "国毅"],
+    24: ["定國洋子", "yoko"],
+    25: ["hitomi", "hitomix", "尾崎仁美", "UKさん"],
+}
+
+
+def _match_client_id(topic: str) -> Optional[int]:
+    """ミーティングタイトルからcoaching-toolのclient_idを特定する。
+    マッチしない場合（合格者インタビュー等、既存クライアント以外の録音）はNoneを返す。"""
+    for client_id, keywords in CLIENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in topic.lower():
+                return client_id
+    return None
+
+
+COACHING_SUMMARY_PROMPT = """
+以下はコーチングの1on1面談を構造化したナレッジ記録です。
+これを「コーチング管理ツール」に保存するための面談サマリーとアクションアイテムに変換してください。
+
+# ナレッジ記録
+{knowledge}
+
+---
+
+以下のJSON形式のみを出力してください（説明文・コードブロック記号など他の文字は一切出力しないこと）：
+
+{{
+  "summary": "面談で何を確認し、何が課題で、何を決めたかを3〜6文の具体的な日本語で。",
+  "action_items": ["クライアント本人が次回の面談までに実際に行う学習行動を3〜5個。"]
+}}
+
+action_itemsには、コーチ側の商品開発タスクや「○○ツールを作る」「○○資料を作成する」のような
+ビジネス改善アイデアは絶対に含めないこと。クライアントが自分の学習のために行う具体的な行動のみを書くこと。
+本文に次回の予約に関する言及があれば、それも1項目として含めてよい。
+"""
+
+
+async def generate_coaching_summary(knowledge: str) -> Optional[dict]:
+    """ナレッジ記録からクライアント向けサマリー＋アクションアイテムをJSONで抽出する"""
+    if not ANTHROPIC_API_KEY:
+        return None
+    try:
+        prompt = COACHING_SUMMARY_PROMPT.format(knowledge=knowledge[:8000])
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5",
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            r.raise_for_status()
+            text = r.json()["content"][0]["text"].strip()
+            # コードブロックで返ってきた場合に備えて剥がす
+            if text.startswith("```"):
+                text = text.strip("`").lstrip("json").strip()
+            return json.loads(text)
+    except Exception as e:
+        logger.warning(f"generate_coaching_summary エラー: {e}")
+        return None
+
+
+async def sync_to_coaching_db(topic: str, date: str, knowledge: str, report_url: str) -> None:
+    """クライアントを特定できた場合のみ、coaching-toolのNeon DBにsession・action_itemsを書き込む"""
+    if not COACHING_DATABASE_URL:
+        return
+    client_id = _match_client_id(topic)
+    if client_id is None:
+        logger.info(f"coaching DB同期: クライアント特定できず（スキップ）: {topic}")
+        return
+
+    import asyncpg
+    date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+    conn = None
+    try:
+        conn = await asyncpg.connect(COACHING_DATABASE_URL)
+        existing = await conn.fetchval(
+            "SELECT id FROM sessions WHERE client_id = $1 AND date = $2", client_id, date_obj
+        )
+        if existing:
+            logger.info(f"coaching DB同期: 既存セッションのためスキップ (client_id={client_id}, date={date})")
+            return
+
+        coaching_data = await generate_coaching_summary(knowledge)
+        if not coaching_data:
+            logger.warning(f"coaching DB同期: サマリー生成失敗 (client_id={client_id})")
+            return
+
+        session_id = await conn.fetchval(
+            """INSERT INTO sessions (client_id, date, summary, report_url)
+               VALUES ($1, $2, $3, $4) RETURNING id""",
+            client_id, date_obj, coaching_data.get("summary", ""), report_url or None,
+        )
+        for content in coaching_data.get("action_items", []):
+            await conn.execute(
+                "INSERT INTO action_items (session_id, content, status) VALUES ($1, $2, 'pending')",
+                session_id, content,
+            )
+        logger.info(
+            f"coaching DB同期完了: client_id={client_id}, session_id={session_id}, "
+            f"actions={len(coaching_data.get('action_items', []))}"
+        )
+    except Exception as e:
+        logger.error(f"coaching DB同期エラー: {e}", exc_info=True)
+    finally:
+        if conn:
+            await conn.close()
+
+
 # ─── ローカルナレッジフォルダ保存 ─────────────────────────────
 def save_to_local_knowledge(
     topic: str, date: str, host: str, duration: int,
@@ -1123,6 +1268,9 @@ async def process_manual_input(topic: str, transcript: str, date_str: str, durat
             topic=topic, date=date_str, host="(手動入力)", duration=duration,
             transcript=transcript, knowledge=knowledge, surge_url=surge_url
         )
+
+        # Step7: coaching-tool（Neon DB）に同期（クライアント特定できた場合のみ）
+        await sync_to_coaching_db(topic=topic, date=date_str, knowledge=knowledge, report_url=surge_url)
 
         logger.info(f"手動処理完了: surge={surge_url} notion={notion_url}")
 
