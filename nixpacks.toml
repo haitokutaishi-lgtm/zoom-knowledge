@@ -1,11 +1,5 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "nodejs_20", "python311", "python311Packages.pip"]
-
-[phases.build]
-cmds = [
-  "npm install -g surge",
-  "pip install -r requirements.txt"
-]
+nixPkgs = ["ffmpeg", "nodejs_20"]
 
 [start]
 cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
