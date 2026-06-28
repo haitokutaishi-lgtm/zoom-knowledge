@@ -1,11 +1,11 @@
-providers = ["node", "python"]
+providers = ["python"]
 
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["ffmpeg", "nodejs_20"]
 
 [phases.build]
 cmds = [
-  "npm install",
+  "npm install -g surge",
   "pip install -r requirements.txt"
 ]
 
