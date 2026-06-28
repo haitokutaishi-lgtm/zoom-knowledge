@@ -756,12 +756,25 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
             html = html.split("```")[1]
             if html.startswith("html"):
                 html = html[4:]
-        # プロンプト指示だけでは「あなた」表記が残ることがあるため確実に名前へ置換する
-        name = _extract_participant_name(topic)
-        if name:
-            html = html.replace("あなた", f"{name}さん")
-        # 「！」を熱量表現に使う指示の副作用で文頭に意味のない「！」が付くことがあるため除去する
+        # _extract_participant_nameはURL用スラッグ（例: "haruka-makino"）を返すため、
+        # 表示用には先頭の名前部分だけを取り出して人名らしい形に直す
         import re
+        slug_name = _extract_participant_name(topic)
+        display_name = ""
+        if slug_name and re.match(r"^[a-z-]+$", slug_name):
+            display_name = slug_name.split("-")[0].capitalize()
+        elif slug_name:
+            display_name = slug_name
+        # プロンプト指示だけでは「あなた」表記が残ることがあるため確実に名前へ置換する
+        if display_name:
+            html = html.replace("あなた", f"{display_name}さん")
+            # LLMが「haruka-makino」のようなスラッグ表記をそのまま生成することがあるため統一する
+            if slug_name and re.match(r"^[a-z-]+$", slug_name):
+                html = re.sub(
+                    rf"\b{re.escape(slug_name)}(さん)?\b",
+                    f"{display_name}さん", html, flags=re.IGNORECASE,
+                )
+        # 「！」を熱量表現に使う指示の副作用で文頭に意味のない「！」が付くことがあるため除去する
         html = re.sub(r"(<p[^>]*>)\s*！\s*", r"\1", html)
         html = _fix_priority_badges(html)
         logger.info("HTMLレポート生成完了（ローカルLLM）")
