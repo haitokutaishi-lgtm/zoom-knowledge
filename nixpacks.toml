@@ -1,5 +1,0 @@
-[phases.setup]
-nixPkgs = ["ffmpeg", "nodejs_20"]
-
-[start]
-cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
