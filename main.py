@@ -972,12 +972,17 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
 
 def _match_client_id(topic: str) -> Optional[int]:
     """ミーティングタイトルからcoaching-toolのclient_idを特定する。
-    マッチしない場合（合格者インタビュー等、既存クライアント以外の録音）はNoneを返す。"""
+    マッチしない場合（合格者インタビュー等、既存クライアント以外の録音）はNoneを返す。
+    例えば"YAMA"が"Yamada"の部分文字列になるなど、短いキーワードが別人の長いキーワードに
+    誤って包含されるケースがあるため、最長一致のキーワードを優先する。"""
+    topic_lower = topic.lower()
+    best: tuple[int, int] | None = None  # (keyword_len, client_id)
     for client_id, keywords in CLIENT_KEYWORDS.items():
         for kw in keywords:
-            if kw.lower() in topic.lower():
-                return client_id
-    return None
+            if kw.lower() in topic_lower:
+                if best is None or len(kw) > best[0]:
+                    best = (len(kw), client_id)
+    return best[1] if best else None
 
 
 COACHING_SUMMARY_PROMPT = """
