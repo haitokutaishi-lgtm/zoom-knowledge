@@ -87,7 +87,20 @@ def _is_skip_topic(topic: str) -> bool:
 
 
 # ─── 重複処理防止（録画あり/なし の二重処理を防ぐ） ───────────
-_processed_meetings: dict = {}  # meeting_id → datetime
+# local_runner.pyはlaunchdから15分おきに毎回新規プロセスとして起動されるため、
+# メモリ上の辞書だけではプロセスを跨いだ重複防止にならない。
+# ファイルに永続化し、surge.shの一時的なエラーで誤って再処理されることを防ぐ。
+PROCESSED_LOG_PATH = Path(__file__).parent / "processed_meetings.json"
+
+def _load_processed_meetings() -> dict:
+    if PROCESSED_LOG_PATH.exists():
+        try:
+            return json.loads(PROCESSED_LOG_PATH.read_text())
+        except Exception:
+            return {}
+    return {}
+
+_processed_meetings: dict = _load_processed_meetings()  # meeting_id → datetime(ISO文字列)
 
 def _try_claim_meeting(meeting_id: str) -> bool:
     """このミーティングの処理権を先着1件だけ取得する。
@@ -95,7 +108,13 @@ def _try_claim_meeting(meeting_id: str) -> bool:
     if meeting_id in _processed_meetings:
         logger.info(f"スキップ（処理済み）: {meeting_id}")
         return False
-    _processed_meetings[meeting_id] = datetime.utcnow()
+    _processed_meetings[meeting_id] = datetime.utcnow().isoformat()
+    try:
+        PROCESSED_LOG_PATH.write_text(
+            json.dumps(_processed_meetings, ensure_ascii=False, indent=2)
+        )
+    except Exception as e:
+        logger.warning(f"処理済み記録の保存に失敗: {e}")
     return True
 
 

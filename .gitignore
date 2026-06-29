@@ -9,3 +9,4 @@ node_modules/
 *.lock
 local_runner.log
 local_runner.error.log
+processed_meetings.json
