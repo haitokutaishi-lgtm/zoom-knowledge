@@ -343,11 +343,15 @@ def _extract_participant_name(topic: str) -> str:
     例: '1on1 牧野はるか' → 'makino-haruka'
         '矢橋×田中 MTG' → 'tanaka'（ホスト以外）
         'Haruka Makino 面談' → 'haruka-makino'
+        'CAMP YAMAさん：1on1セッション' → 'yama'
+        'CAMP はるかさん' → 'はるか'
+    CAMPは受講コミュニティ名であり個人名ではないため、まず除去してから名前を抽出する。
     ASCII名はそのまま使用、日本語は文字コードベースのスラッグに変換
     """
     import re
+    cleaned = re.sub(r'\bCAMP\b', '', topic, flags=re.IGNORECASE).strip()
     # ASCII部分だけ抽出してスラッグ化
-    ascii_parts = re.findall(r'[a-zA-Z]+', topic)
+    ascii_parts = re.findall(r'[a-zA-Z]+', cleaned)
     if ascii_parts:
         slug = '-'.join(ascii_parts).lower()
         # 不要な一般単語を除去
@@ -355,8 +359,12 @@ def _extract_participant_name(topic: str) -> str:
         slug_parts = [p for p in slug.split('-') if p not in stop and len(p) > 1]
         if slug_parts:
             return '-'.join(slug_parts)[:30]
+    # ASCIIで名前が取れない場合、「○○さん」の直前を日本語名として使う（姓名間の全角スペースは名前に含める）
+    m = re.search(r'([^：:、,]+)さん', cleaned)
+    if m:
+        return m.group(1).strip()
     # 日本語の場合: 文字をそのまま使う（deploy_to_surge側でASCII変換）
-    return topic
+    return cleaned or topic
 
 
 def _select_audio_file(files: list) -> Optional[dict]:
@@ -517,6 +525,15 @@ async def generate_knowledge(transcript: str, topic: str, duration: int) -> str:
     )
     if USE_LOCAL_LLM:
         knowledge = await _ollama_generate(prompt, max_tokens=3072)
+        # LLMがtopicの「CAMP YAMAさん」のような表記をそのまま使うことがあるため、
+        # CAMPは受講コミュニティ名であり個人名ではないため除去する
+        import re
+        slug_name = _extract_participant_name(topic)
+        display_name = slug_name.split("-")[0].capitalize() if slug_name and re.match(r"^[a-z-]+$", slug_name) else slug_name
+        if display_name:
+            knowledge = re.sub(
+                rf"CAMP\s*{re.escape(display_name)}", display_name, knowledge, flags=re.IGNORECASE,
+            )
         logger.info("ナレッジ生成完了（ローカルLLM）")
         return knowledge
     async with httpx.AsyncClient(timeout=120) as client:
@@ -774,6 +791,11 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
                     rf"\b{re.escape(slug_name)}(さん)?\b",
                     f"{display_name}さん", html, flags=re.IGNORECASE,
                 )
+            # LLMがtopicの「CAMP YAMAさん」のような表記をそのまま使うことがあるため、
+            # CAMPは受講コミュニティ名であり個人名ではないため除去する
+            html = re.sub(
+                rf"CAMP\s*{re.escape(display_name)}", display_name, html, flags=re.IGNORECASE,
+            )
         # 「！」を熱量表現に使う指示の副作用で文頭に意味のない「！」が付くことがあるため除去する
         html = re.sub(r"(<p[^>]*>)\s*！\s*", r"\1", html)
         html = _fix_priority_badges(html)
