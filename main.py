@@ -564,7 +564,7 @@ async def generate_knowledge(transcript: str, topic: str, duration: int) -> str:
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 2048,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -692,6 +692,7 @@ HTML_REPORT_PROMPT = """
 # 重要：内容の密度
 - このレポートは受講生が後で読み返して「あの日何を話したか」を振り返るための記録であり、お客様にも見せる完成品です。要約しすぎず、書き起こしに出てきた発言・具体例・数字・固有名詞を漏れなく反映してください。
 - 「②本日ご確認いただいた内容」は1〜2行の箇条書きで済ませず、話題ごとに見出しを分け、各話題で3〜6項目程度、背景や理由も含めた具体的な記述にしてください。
+- 書き起こしに出てきた具体的なアドバイス・方法論・推奨手順・試験傾向・数値目標は一語一句省略せず、見出しを立てて詳細に起こしてください。例えば「どの論点がどのくらい出るか」「なぜその方法がよいか」「具体的な手順の順序」などは、ポイントを絞って削るのではなく、ほぼそのまま文章化してください。
 - 「④次回までのアクション」も、話の中で出た具体的な理由・期限・背景を添えてください。
 - ①〜⑤の各セクションで同じエピソード・同じ発言を繰り返し使い回してはいけない。それぞれ違う角度・違う内容を担当させること（①は概要、②は詳細な論点、③は決定事項、④は今後の行動、⑤は称賛とエールに役割分担する）
 
@@ -742,7 +743,13 @@ HTML_REPORT_PROMPT = """
 
 <!-- 書き起こしをもとに以下のセクションをすべて生成してください -->
 <!-- ① 今回のセッションについて（概要・目的、3〜5文で具体的に） -->
-<!-- ② 本日ご確認いただいた内容（話題ごとに見出しを分け、各話題3〜6項目の具体的な箇条書き、丁寧語。要約しすぎず書き起こしの発言・数字・固有名詞を漏れなく反映し、後で読み返して内容が再現できる密度にする） -->
+<!-- ② 本日ご確認いただいた内容（話題ごとに見出しを分け、各話題3〜6項目の具体的な箇条書き、丁寧語。
+     書き起こしに出てきたすべての話題を扱うこと。特に以下は必ず独立した見出しで詳細に記載すること：
+     ・具体的なアドバイスや方法論（なぜそうするのかの理由も含む）
+     ・試験傾向や頻出論点の情報（テストレット別・論点別など）
+     ・数値目標・スケジュール・期限
+     ・今後の学習方針の変更点や合意事項
+     要約しすぎず書き起こしの発言・数字・固有名詞を漏れなく反映し、後で読み返して内容が再現できる密度にする。1見出しあたり最低3項目は書くこと。 -->
 <!-- ③ 決定事項・方針（合意した内容、なぜそう決めたかの背景も） -->
 <!-- ④ 次回までのアクション（丁寧語、理由や期限も添える）。
      各アクションは必ず次の構造で出力すること（liの入れ子は禁止、action-itemは div のみに使う）：
@@ -787,7 +794,7 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
         transcript=transcript[:12000]
     )
     if USE_LOCAL_LLM:
-        html = await _ollama_generate(prompt, max_tokens=6144)
+        html = await _ollama_generate(prompt, max_tokens=8192)
         if html.startswith("```"):
             html = html.split("```")[1]
             if html.startswith("html"):
@@ -829,7 +836,7 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 4096,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -981,7 +988,7 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     18: ["KS"],
     19: ["Sato"],
     20: ["新昌靜", "しょうせい"],
-    21: ["りんたろう"],
+    21: ["りんたろう", "rintaro"],
     22: ["Kobayashi Takahiro", "TAKAHIRO KOBAYASHI", "小林", "たか"],
     23: ["山田", "yamada", "国毅"],
     24: ["定國洋子", "yoko"],
@@ -1041,7 +1048,7 @@ async def generate_coaching_summary(knowledge: str) -> Optional[dict]:
                     "content-type": "application/json",
                 },
                 json={
-                    "model": "claude-haiku-4-5",
+                    "model": "claude-haiku-4-5-20251001",
                     "max_tokens": 1024,
                     "messages": [{"role": "user", "content": prompt}],
                 },
