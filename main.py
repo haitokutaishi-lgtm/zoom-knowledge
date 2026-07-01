@@ -988,7 +988,7 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     18: ["KS"],
     19: ["Sato"],
     20: ["新昌靜", "しょうせい"],
-    21: ["りんたろう", "rintaro"],
+    21: ["りんたろう", "rintaro", "秋山", "倫太郎"],
     22: ["Kobayashi Takahiro", "TAKAHIRO KOBAYASHI", "小林", "たか"],
     23: ["山田", "yamada", "国毅"],
     24: ["定國洋子", "yoko"],
