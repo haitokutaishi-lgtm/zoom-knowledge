@@ -118,6 +118,20 @@ def _try_claim_meeting(meeting_id: str) -> bool:
     return True
 
 
+def _release_meeting(meeting_id: str) -> None:
+    """処理失敗時に処理済みフラグを取り消す。次回の自動処理でリトライされる。"""
+    if meeting_id not in _processed_meetings:
+        return
+    del _processed_meetings[meeting_id]
+    try:
+        PROCESSED_LOG_PATH.write_text(
+            json.dumps(_processed_meetings, ensure_ascii=False, indent=2)
+        )
+        logger.info(f"処理済みフラグを取り消し（リトライ可能）: {meeting_id}")
+    except Exception as e:
+        logger.warning(f"処理済みフラグの取り消しに失敗: {e}")
+
+
 # ─── Zoom Webhook受信 ─────────────────────────────────────────
 @app.post("/webhook/zoom")
 async def zoom_webhook(request: Request, background_tasks: BackgroundTasks):
@@ -864,6 +878,16 @@ async def deploy_to_surge(html: str, topic: str, date: str, participant_name: st
     slug = re.sub(r'[^a-zA-Z0-9]', '-', name_part)
     slug = re.sub(r'-+', '-', slug)[:30].strip('-').lower()
     if not slug:
+        # 日本語名など ASCII 文字が取れない場合、CLIENT_KEYWORDS からローマ字キーを補完する
+        client_id = _match_client_id(topic)
+        if client_id is not None:
+            for kw in CLIENT_KEYWORDS.get(client_id, []):
+                kw_slug = re.sub(r'[^a-zA-Z0-9]', '-', kw)
+                kw_slug = re.sub(r'-+', '-', kw_slug).strip('-').lower()
+                if kw_slug and len(kw_slug) > 2:
+                    slug = kw_slug[:20]
+                    break
+    if not slug:
         slug = "meeting"
     # 日付はYYYY-MM-DD形式
     domain = f"1on1-{date}-{slug}.surge.sh"
@@ -983,7 +1007,7 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     13: ["hiromi3588"],
     14: ["YAMA", "CAMP YAMA"],
     15: ["Haruka Makino", "はるか", "牧野はるか", "CAMP はるか"],
-    16: ["erika"],
+    16: ["erika", "アカサカ", "エリカ", "AKASAKA"],
     17: ["りょう"],
     18: ["KS"],
     19: ["Sato"],
@@ -1486,6 +1510,9 @@ async def _process_from_api(meeting: dict, token: str):
 
     except Exception as e:
         logger.error(f"_process_from_api エラー: {e}", exc_info=True)
+        meeting_id = str(meeting.get("id", ""))
+        if meeting_id:
+            _release_meeting(meeting_id)
     finally:
         if audio_path:
             Path(audio_path).unlink(missing_ok=True)
