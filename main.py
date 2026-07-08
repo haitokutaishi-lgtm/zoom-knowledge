@@ -1469,11 +1469,7 @@ async def _check_and_process_pending():
                 continue
 
             logger.info(f"未処理録画を発見 → 処理開始: {topic} ({date_str})")
-            # ローカルLLM使用時はCPU/メモリ競合を避けるため1件ずつ順番に処理する
-            if USE_LOCAL_LLM:
-                await _process_from_api(meeting, token)
-            else:
-                asyncio.create_task(_process_from_api(meeting, token))
+            await _process_from_api(meeting, token)
 
 
 async def _process_from_api(meeting: dict, token: str):
