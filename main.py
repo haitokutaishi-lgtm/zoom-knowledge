@@ -1439,8 +1439,28 @@ async def _check_and_process_pending():
                 async with httpx.AsyncClient(timeout=8) as hc:
                     hr = await hc.head(expected_url, follow_redirects=True)
                     if hr.status_code == 200:
-                        logger.info(f"処理済みスキップ: {topic}")
-                        continue
+                        # surge存在 → coaching DBも確認してから判断
+                        db_has_record = False
+                        client_id = _match_client_id(topic)
+                        if client_id is not None and COACHING_DATABASE_URL:
+                            try:
+                                import asyncpg
+                                from datetime import date as _date
+                                _conn = await asyncpg.connect(COACHING_DATABASE_URL)
+                                _date_obj = _date.fromisoformat(date_str)
+                                db_has_record = bool(await _conn.fetchval(
+                                    "SELECT id FROM sessions WHERE client_id=$1 AND date=$2",
+                                    client_id, _date_obj
+                                ))
+                                await _conn.close()
+                            except Exception as e:
+                                logger.warning(f"coaching DB確認失敗: {e}")
+                        else:
+                            db_has_record = True  # クライアント不明 or DB未設定 → スキップ扱い
+                        if db_has_record:
+                            logger.info(f"処理済みスキップ（surge+DB確認済み）: {topic}")
+                            continue
+                        logger.info(f"surge存在するがDB未記録 → 処理継続: {topic}")
             except Exception:
                 pass  # チェック失敗なら処理を試みる
 
