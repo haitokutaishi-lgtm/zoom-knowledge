@@ -562,7 +562,7 @@ async def generate_knowledge(transcript: str, topic: str, duration: int) -> str:
         # CAMPは受講コミュニティ名であり個人名ではないため除去する
         import re
         slug_name = _extract_participant_name(topic)
-        display_name = slug_name.split("-")[0].capitalize() if slug_name and re.match(r"^[a-z-]+$", slug_name) else slug_name
+        display_name = _get_display_name(topic)
         if display_name:
             knowledge = re.sub(
                 rf"CAMP\s*{re.escape(display_name)}", display_name, knowledge, flags=re.IGNORECASE,
@@ -830,15 +830,9 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
             html = html.split("```")[1]
             if html.startswith("html"):
                 html = html[4:]
-        # _extract_participant_nameはURL用スラッグ（例: "haruka-makino"）を返すため、
-        # 表示用には先頭の名前部分だけを取り出して人名らしい形に直す
         import re
         slug_name = _extract_participant_name(topic)
-        display_name = ""
-        if slug_name and re.match(r"^[a-z-]+$", slug_name):
-            display_name = slug_name.split("-")[0].capitalize()
-        elif slug_name:
-            display_name = slug_name
+        display_name = _get_display_name(topic)
         # プロンプト指示だけでは「あなた」表記が残ることがあるため確実に名前へ置換する
         if display_name:
             html = html.replace("あなた", f"{display_name}さん")
@@ -1022,7 +1016,7 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     11: ["なむなむ"],
     12: ["佐藤"],
     13: ["hiromi3588"],
-    14: ["YAMA", "CAMP YAMA"],
+    14: ["YAMA", "CAMP YAMA", "yamashita", "山下"],
     15: ["Haruka Makino", "はるか", "牧野はるか", "CAMP はるか"],
     16: ["erika", "アカサカ", "エリカ", "AKASAKA"],
     17: ["りょう"],
@@ -1035,6 +1029,24 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     24: ["定國洋子", "yoko"],
     25: ["hitomi", "hitomix", "尾崎仁美", "UKさん"],
 }
+
+# Zoomトピックから推測した名前が実際の名前と異なるクライアントの表示名を上書きする。
+# キーはclient_id、値はレポート・ナレッジで使う表示用の名前（「さん」不要）。
+CLIENT_DISPLAY_NAMES: dict[int, str] = {
+    14: "山下",
+}
+
+
+def _get_display_name(topic: str) -> str:
+    """ミーティングタイトルから表示用の名前を返す。
+    CLIENT_DISPLAY_NAMESに登録済みの場合はそちらを優先し、未登録の場合はスラッグから推定する。"""
+    client_id = _match_client_id(topic)
+    if client_id is not None and client_id in CLIENT_DISPLAY_NAMES:
+        return CLIENT_DISPLAY_NAMES[client_id]
+    slug_name = _extract_participant_name(topic)
+    if slug_name and re.match(r"^[a-z-]+$", slug_name):
+        return slug_name.split("-")[0].capitalize()
+    return slug_name
 
 
 def _match_client_id(topic: str) -> Optional[int]:
