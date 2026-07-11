@@ -1011,6 +1011,7 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     23: ["山田", "yamada", "国毅"],
     24: ["定國洋子", "yoko"],
     25: ["hitomi", "hitomix", "尾崎仁美", "UKさん"],
+    26: ["Kai", "kai", "カイ"],
 }
 
 # Zoomトピックから推測した名前が実際の名前と異なるクライアントの表示名を上書きする。
