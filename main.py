@@ -707,6 +707,7 @@ HTML_REPORT_PROMPT = """
 - このレポートは受講生が後で読み返して「あの日何を話したか」を振り返るための記録であり、お客様にも見せる完成品です。要約しすぎず、書き起こしに出てきた発言・具体例・数字・固有名詞を漏れなく反映してください。
 - 「②本日ご確認いただいた内容」は1〜2行の箇条書きで済ませず、話題ごとに見出しを分け、各話題で3〜6項目程度、背景や理由も含めた具体的な記述にしてください。
 - 書き起こしに出てきた具体的なアドバイス・方法論・推奨手順・試験傾向・数値目標は一語一句省略せず、見出しを立てて詳細に起こしてください。例えば「どの論点がどのくらい出るか」「なぜその方法がよいか」「具体的な手順の順序」などは、ポイントを絞って削るのではなく、ほぼそのまま文章化してください。
+- 「⓪今週やること」は受講生がページを開いた瞬間に目に入る最重要ボックスです。書き起こしから今週〜次回ミーティングまでにやるべき行動を3〜5項目に絞り、期限・数値を含めて具体的に書いてください。
 - 「④次回までのアクション」も、話の中で出た具体的な理由・期限・背景を添えてください。
 - ①〜⑤の各セクションで同じエピソード・同じ発言を繰り返し使い回してはいけない。それぞれ違う角度・違う内容を担当させること（①は概要、②は詳細な論点、③は決定事項、④は今後の行動、⑤は称賛とエールに役割分担する）
 
@@ -743,6 +744,13 @@ HTML_REPORT_PROMPT = """
   .badge {{ font-size: 0.72em; padding: 2px 8px; border-radius: 12px; font-weight: bold; white-space: nowrap; margin-top: 2px; }}
   .badge-high {{ background: #fed7d7; color: #c53030; }}
   .badge-mid  {{ background: #feebc8; color: #c05621; }}
+  .next-actions-summary {{ background: linear-gradient(135deg, #ebf8ff, #e6fffa); border: 2px solid #63b3ed; border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }}
+  .next-actions-summary h2 {{ margin: 0 0 14px; font-size: 1.1em; color: #2b6cb0; }}
+  .action-check {{ display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-bottom: 1px dashed #bee3f8; }}
+  .action-check:last-child {{ border-bottom: none; }}
+  .check-icon {{ font-size: 1.3em; margin-top: 1px; flex-shrink: 0; }}
+  .action-check p {{ margin: 0; font-size: 0.95em; line-height: 1.6; }}
+  .deadline {{ font-size: 0.8em; color: #e53e3e; font-weight: bold; margin-top: 3px; }}
   .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 20px 24px; border-radius: 8px; line-height: 1.9; }}
   .signature {{ text-align: right; margin: 12px 0 0; font-weight: bold; color: #2f855a; }}
   .footer {{ text-align: center; color: #aaa; font-size: 0.78em; margin-top: 28px; padding-top: 16px; border-top: 1px solid #eee; }}
@@ -756,6 +764,15 @@ HTML_REPORT_PROMPT = """
 </div>
 
 <!-- 書き起こしをもとに以下のセクションをすべて生成してください -->
+<!-- ⓪ 今週やること（最重要：受講生がページを開いた瞬間に今週何をすべきかが分かるサマリーボックス）
+     必ずheaderのすぐ下・①の前に配置すること。
+     action-checkを3〜5個並べる。各itemには期限・具体的な数値目標を含めること。
+     構造（このまま出力すること）：
+     <div class="next-actions-summary">
+       <h2>🎯 今週やること</h2>
+       <div class="action-check"><span class="check-icon">☐</span><div><p>具体的なアクション（期限・数値あり）</p></div></div>
+       <div class="action-check"><span class="check-icon">☐</span><div><p>具体的なアクション（期限・数値あり）</p></div></div>
+     </div> -->
 <!-- ① 今回のセッションについて（概要・目的、3〜5文で具体的に） -->
 <!-- ② 本日ご確認いただいた内容（話題ごとに見出しを分け、各話題3〜6項目の具体的な箇条書き、丁寧語。
      書き起こしに出てきたすべての話題を扱うこと。特に以下は必ず独立した見出しで詳細に記載すること：
