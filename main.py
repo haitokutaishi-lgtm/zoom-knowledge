@@ -1515,12 +1515,29 @@ async def _process_from_api(meeting: dict, token: str):
             tmp.close()
             audio_path = tmp.name
 
-        transcript = await transcribe_audio(audio_path)
+        transcript = ""
+        vtt_file = next((f for f in files if f.get("file_type") == "TRANSCRIPT"
+                         and f.get("status") == "completed"), None)
+        if vtt_file:
+            try:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=60) as hc:
+                    vr = await hc.get(vtt_file["download_url"] + f"?access_token={fresh_token}")
+                    if vr.is_success:
+                        transcript = parse_vtt(vr.text)
+                        logger.info(f"ZoomトランスクリプトVTT取得成功: {len(transcript)}文字")
+            except Exception as e:
+                logger.warning(f"VTT取得失敗: {e}")
+        if not transcript:
+            transcript = await transcribe_audio(audio_path)
         knowledge  = await generate_knowledge(transcript, topic, duration)
-        notion_url = await save_to_notion(
-            topic=topic, host="", start_at=start_time,
-            duration=duration, transcript=transcript, knowledge=knowledge,
-        )
+        try:
+            notion_url = await save_to_notion(
+                topic=topic, host="", start_at=start_time,
+                duration=duration, transcript=transcript, knowledge=knowledge,
+            )
+        except Exception as e:
+            logger.warning(f"Notion保存スキップ（エラー継続）: {e}")
+            notion_url = ""
         html = await generate_html_report(
             transcript=transcript, topic=topic,
             host="", date=date_str, duration=duration,
