@@ -690,25 +690,17 @@ def _text_to_notion_blocks(text: str) -> list:
 
 # ─── HTMLレポート生成プロンプト ────────────────────────────────
 HTML_REPORT_PROMPT = """
-あなたは「タイシ」です。USCPA（米国公認会計士）試験の指導者として、受講生に直接送付できる1on1レポートHTMLを生成してください。
+あなたは「タイシ」です。USCPA指導者として受講生に送る1on1レポートHTMLを生成してください。
+コンパクトに収めながら、必要情報をすべて網羅してください。
 
-# 重要：言葉遣いのルール
-- 受講生（クライアント）への丁寧な敬語で書く（「〜されています」「〜いただけます」など）
+# 言葉遣いのルール
+- 受講生への丁寧な敬語（「〜されています」「〜いただけます」）
 - 上から目線・命令形・断定調は使わない
-- 励ましと感謝の気持ちを込める
-- 箇条書きも「・〜していただく」「・〜されることをおすすめします」のような丁寧な表現で
-- 受講生を指すときに「あなた」という表記は禁止。必ず名前（「〇〇さん」）を使うか、主語を省略する
-- 名前は日本語の自然な呼び方（例：「Harukaさん」）で統一し、「haruka-makino」のようなローマ字をハイフンで繋いだ表記は使わない
-- 「！」は文末（句点の代わり）にのみ使い、文や段落の先頭に「！」を単独で置かない
-- 書き起こしの中のカタカナ語・横文字は、声に出して読んでも日本語としても英語の専門用語としても意味が取れないもの（音声認識の誤変換と思われるもの。例：「eダイルテット」のような実在しない語）は、そのまま転記せず省略するか、前後の文脈から確実に推測できる場合のみ正しい言葉に直すこと。意味が不確かなまま無理に断定しない
-- 書き起こしに書かれていない出来事・数字・地名・予定を、推測や創作で書き加えることは禁止。書き起こしに根拠がない内容は書かないこと
-
-# 重要：内容の密度
-- このレポートは受講生が後で読み返して「あの日何を話したか」を振り返るための記録であり、お客様にも見せる完成品です。要約しすぎず、書き起こしに出てきた発言・具体例・数字・固有名詞を漏れなく反映してください。
-- 「②本日ご確認いただいた内容」は1〜2行の箇条書きで済ませず、話題ごとに見出しを分け、各話題で3〜6項目程度、背景や理由も含めた具体的な記述にしてください。
-- 書き起こしに出てきた具体的なアドバイス・方法論・推奨手順・試験傾向・数値目標は一語一句省略せず、見出しを立てて詳細に起こしてください。例えば「どの論点がどのくらい出るか」「なぜその方法がよいか」「具体的な手順の順序」などは、ポイントを絞って削るのではなく、ほぼそのまま文章化してください。
-- 「④次回までのアクション」も、話の中で出た具体的な理由・期限・背景を添えてください。
-- ①〜⑤の各セクションで同じエピソード・同じ発言を繰り返し使い回してはいけない。それぞれ違う角度・違う内容を担当させること（①は概要、②は詳細な論点、③は決定事項、④は今後の行動、⑤は称賛とエールに役割分担する）
+- 受講生を指すときに「あなた」は禁止。名前（「〇〇さん」）か主語省略
+- 名前は自然な呼び方（「Harukaさん」）で。「haruka-makino」のようなハイフン繋ぎは不可
+- 「！」は文末のみ。文の先頭に単独で置かない
+- 音声認識の誤変換と思われるカタカナ語は省略し、意味不明なまま転記しない
+- 書き起こしにない事実・数字・予定を創作・推測で書かない
 
 # ミーティング情報
 タイトル: {topic}
@@ -730,57 +722,80 @@ HTML_REPORT_PROMPT = """
 <title>1on1レポート｜{topic}｜{date}</title>
 <style>
   body {{ font-family: 'Hiragino Sans', 'Yu Gothic', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f8f9fa; color: #333; line-height: 1.7; }}
-  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 24px; }}
-  .header h1 {{ margin: 0 0 6px; font-size: 1.5em; }}
-  .header .meta {{ margin: 0; opacity: 0.9; font-size: 0.9em; }}
-  .card {{ background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
-  .card h2 {{ margin: 0 0 16px; font-size: 1.05em; color: #5a67d8; border-bottom: 2px solid #e8eaf6; padding-bottom: 8px; }}
-  ul {{ margin: 0; padding-left: 20px; }}
-  li {{ margin-bottom: 10px; }}
-  .action-item {{ display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 8px; margin-bottom: 10px; }}
+  .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 24px 30px; border-radius: 12px; margin-bottom: 20px; }}
+  .header h1 {{ margin: 0 0 4px; font-size: 1.4em; }}
+  .header .meta {{ margin: 0; opacity: 0.9; font-size: 0.88em; }}
+  .card {{ background: white; border-radius: 12px; padding: 20px 24px; margin-bottom: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+  .card h2 {{ margin: 0 0 12px; font-size: 1.0em; color: #5a67d8; border-bottom: 2px solid #e8eaf6; padding-bottom: 6px; }}
+  .card h3 {{ margin: 14px 0 6px; font-size: 0.92em; color: #444; }}
+  ul {{ margin: 0; padding-left: 18px; }}
+  li {{ margin-bottom: 6px; font-size: 0.93em; }}
+  .check-list {{ list-style: none; padding-left: 0; }}
+  .check-list li {{ padding-left: 1.6em; position: relative; }}
+  .check-list li::before {{ content: "✓"; position: absolute; left: 0; color: #48bb78; font-weight: bold; }}
+  .action-item {{ display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 8px; margin-bottom: 8px; }}
   .action-high {{ background: #fff5f5; border-left: 4px solid #fc8181; }}
   .action-mid  {{ background: #fffaf0; border-left: 4px solid #f6ad55; }}
-  .badge {{ font-size: 0.72em; padding: 2px 8px; border-radius: 12px; font-weight: bold; white-space: nowrap; margin-top: 2px; }}
+  .action-item p {{ margin: 0; font-size: 0.92em; }}
+  .badge {{ font-size: 0.70em; padding: 2px 8px; border-radius: 12px; font-weight: bold; white-space: nowrap; margin-top: 2px; }}
   .badge-high {{ background: #fed7d7; color: #c53030; }}
   .badge-mid  {{ background: #feebc8; color: #c05621; }}
-  .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 20px 24px; border-radius: 8px; line-height: 1.9; }}
+  .message {{ background: linear-gradient(135deg, #f0fff4, #e6fffa); border-left: 4px solid #48bb78; padding: 18px 22px; border-radius: 8px; line-height: 1.85; font-size: 0.93em; }}
+  .message p {{ margin: 0 0 12px; }}
+  .message p:last-of-type {{ margin-bottom: 0; }}
   .signature {{ text-align: right; margin: 12px 0 0; font-weight: bold; color: #2f855a; }}
-  .footer {{ text-align: center; color: #aaa; font-size: 0.78em; margin-top: 28px; padding-top: 16px; border-top: 1px solid #eee; }}
+  .footer {{ text-align: center; color: #aaa; font-size: 0.75em; margin-top: 24px; padding-top: 12px; border-top: 1px solid #eee; }}
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1>📋 1on1セッションレポート</h1>
-  <p class="meta">{topic}　｜　{date}</p>
+  <p class="meta">{topic}　｜　{date}　｜　{duration}分</p>
 </div>
 
-<!-- 書き起こしをもとに以下のセクションをすべて生成してください -->
-<!-- ① 今回のセッションについて（概要・目的、3〜5文で具体的に） -->
-<!-- ② 本日ご確認いただいた内容（話題ごとに見出しを分け、各話題3〜6項目の具体的な箇条書き、丁寧語。
-     書き起こしに出てきたすべての話題を扱うこと。特に以下は必ず独立した見出しで詳細に記載すること：
-     ・具体的なアドバイスや方法論（なぜそうするのかの理由も含む）
-     ・試験傾向や頻出論点の情報（テストレット別・論点別など）
-     ・数値目標・スケジュール・期限
-     ・今後の学習方針の変更点や合意事項
-     要約しすぎず書き起こしの発言・数字・固有名詞を漏れなく反映し、後で読み返して内容が再現できる密度にする。1見出しあたり最低3項目は書くこと。 -->
-<!-- ③ 決定事項・方針（合意した内容、なぜそう決めたかの背景も） -->
-<!-- ④ 次回までのアクション（丁寧語、理由や期限も添える）。
+<!-- 書き起こしをもとに以下4セクションを生成してください -->
+
+<!-- ① MTG内で確認できたこと
+     今回のセッションで話した内容をトピックごとに簡潔な一文で列挙（5〜10項目）。
+     <ul class="check-list"> の <li> で出力すること。 -->
+<div class="card">
+  <h2>✅ MTG内で確認できたこと</h2>
+  <!-- check-list ここに生成 -->
+</div>
+
+<!-- ② 本日ご確認いただいた内容（詳細）
+     話題ごとに <h3> 見出しを立て、各トピックを箇条書き（<ul><li>）で記載。
+     1見出しあたり2〜4項目。書き起こしの発言・数字・固有名詞を漏れなく反映する。
+     コンパクトに1枚に収まるよう、1項目は1〜2文に収める。 -->
+<div class="card">
+  <h2>📝 本日ご確認いただいた内容</h2>
+  <!-- h3 + ul ここに生成 -->
+</div>
+
+<!-- ③ ネクストアクション
+     次回までに取り組む具体的なアクション。優先度高（action-high）・優先度中（action-mid）で分類。
      各アクションは必ず次の構造で出力すること（liの入れ子は禁止、action-itemは div のみに使う）：
-     <div class="action-item action-high"><span class="badge badge-high">優先度高</span><p>具体的なアクション内容</p></div>
+     <div class="action-item action-high"><span class="badge badge-high">優先度高</span><p>具体的なアクション内容（理由や期限も一文で添える）</p></div>
      <div class="action-item action-mid"><span class="badge badge-mid">優先度中</span><p>具体的なアクション内容</p></div> -->
-<!-- ⑤ タイシからのメッセージ（messageクラス）
-     文字数の下限は厳守すること：5つの<p>タグそれぞれを100〜150文字程度で書く（合計500〜750文字、10行以上になる）。
-     1つの<p>が2〜3文に満たない場合は不合格なので書き直すこと。短く済ませてはいけない。
-     1段落目（100字以上）：今回の話の中で本人が話した努力・工夫・成長・苦労を具体的に2つ引用し、その状況を描写する
-     2段落目（100字以上）：1段落目の内容それぞれに対して全力で称賛する（「素晴らしいです」「感動しました」程度の
-       控えめな表現では不十分。「本当にすごいことです」「その粘り強さこそが合格者の共通点です」
-       「ここまでやり切った〇〇さんを誇りに思います」のレベルの熱量で、読んだ瞬間に気持ちが上がるトーンにする。
-       「！」は文末（句点の代わり）にのみ使い、文の先頭に「！」を置かないこと）
-     3段落目（100字以上）：今回の課題や難所について、具体的な状況に触れながらタイシとしての視点や励ましを伝える
-     4段落目（100字以上）：次回に向けた期待を、今回の話の続きを踏まえて熱く具体的に伝える
-     5段落目（100字以上）：今回の話に即した一言の激励で締める
-     最後に <p class="signature">タイシより</p> を必ず別途置く（badgeクラスなど他の用途のクラスを「タイシより」に付けないこと）。 -->
+<div class="card">
+  <h2>🎯 ネクストアクション</h2>
+  <!-- action-item ここに生成 -->
+</div>
+
+<!-- ④ タイシからのメッセージ（messageクラス）
+     3つの<p>タグで構成する（合計200〜350文字）。
+     1段落目（60〜100字）：今回の話で見えた努力・工夫・成長を具体的に1〜2つ引用し称賛する（熱量高く）
+     2段落目（60〜100字）：今回の課題や難所に触れつつタイシとしての励ましと視点を伝える
+     3段落目（60〜100字）：次回に向けた期待と一言の激励で締める
+     最後に <p class="signature">タイシより</p> を必ず置く。 -->
+<div class="card">
+  <h2>💬 タイシからのメッセージ</h2>
+  <div class="message">
+    <!-- p × 3 ここに生成 -->
+    <p class="signature">タイシより</p>
+  </div>
+</div>
 
 <div class="footer">
   <p>本レポートはセッション内容をもとに作成しております。ご不明な点がございましたらお気軽にご連絡ください。</p>
@@ -845,7 +860,7 @@ async def generate_html_report(transcript: str, topic: str, host: str, date: str
             },
             json={
                 "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 4096,
+                "max_tokens": 8192,
                 "messages": [{"role": "user", "content": prompt}],
             },
         )
