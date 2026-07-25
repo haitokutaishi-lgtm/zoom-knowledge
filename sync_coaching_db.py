@@ -50,6 +50,7 @@ CLIENT_KEYWORDS: dict[int, list[str]] = {
     24: ["定國洋子", "yoko"],
     25: ["hitomi", "hitomix", "尾崎仁美", "UKさん"],
     26: ["Kai", "kai", "カイ"],
+    27: ["YUKI", "yuki", "ゆき"],
 }
 
 # グループイベント・スキップ対象キーワード
